@@ -257,3 +257,133 @@ export function validateScenario(scenario: Scenario): string[] {
   }
   return problems;
 }
+
+/* ---------------------------------------------------- story & planning */
+
+export const VIEWS = ["board", "floor"] as const;
+export const ViewSchema = z.enum(VIEWS);
+/** Which of the two frozen views the human is looking at. */
+export type View = z.infer<typeof ViewSchema>;
+
+export const STORY_STATES = ["calm", "escalation", "running", "proposal", "resolved"] as const;
+export const StoryStateSchema = z.enum(STORY_STATES);
+/** The five beats of the demo (dev/active/foundation/video-concept.md). */
+export type StoryState = z.infer<typeof StoryStateSchema>;
+
+/**
+ * A deterministic disturbance applied to a scenario. The demo's only kind is
+ * a part delay that blocks a bay until a given minute.
+ */
+export const DisruptionSchema = z.object({
+  id: z.string().min(1),
+  kind: z.literal("part_delay"),
+  resourceId: z.string().min(1),
+  untilMinute: z.number().int().min(0),
+  reason: z.string().min(1),
+  /** Work item sitting in the bay, marked blocked while the part is missing. */
+  workItemId: z.string().min(1).nullable(),
+  /** The work that remains once the part lands (replaces the item's first step). */
+  remainingStep: z
+    .object({ operation: z.string().min(1), durationMinutes: z.number().int().min(1).max(600) })
+    .nullable()
+    .default(null),
+});
+export type Disruption = z.infer<typeof DisruptionSchema>;
+
+/** One schedule change; the vocabulary shared by demo beats, plans and tools. */
+export const PlanChangeSchema = z.discriminatedUnion("command", [
+  z.object({
+    command: z.literal("update_work_item"),
+    workItemId: z.string().min(1),
+    priority: PrioritySchema,
+  }),
+  z.object({
+    command: z.literal("route_work_item"),
+    workItemId: z.string().min(1),
+    resourceId: z.string().min(1).nullable(),
+    position: z.number().int().min(1).nullable(),
+  }),
+]);
+export type PlanChange = z.infer<typeof PlanChangeSchema>;
+
+export const PlanSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  changes: z.array(PlanChangeSchema).min(1),
+});
+export type Plan = z.infer<typeof PlanSchema>;
+
+export const NOTE_CHANNELS = ["slack", "email", "sms"] as const;
+export const NoteChannelSchema = z.enum(NOTE_CHANNELS);
+export type NoteChannel = z.infer<typeof NoteChannelSchema>;
+
+/** A note "sent" to the team. Simulated: it is state the UI renders, nothing leaves the page. */
+export const ShiftNoteSchema = z.object({
+  id: z.string().min(1),
+  at: z.number(),
+  author: ActorSchema,
+  scenarioId: z.string().min(1),
+  text: z.string().min(1).max(400),
+  channels: z.array(NoteChannelSchema).min(1),
+  recipients: z.array(z.string().min(1)).default([]),
+});
+export type ShiftNote = z.infer<typeof ShiftNoteSchema>;
+
+/* ------------------------------------------------------------ exploration */
+
+/** One candidate schedule evaluated by `explore_schedules`. */
+export interface ExplorationCandidate {
+  id: string;
+  label: string;
+  changes: PlanChange[];
+  /** Share of seeded replications that kept every promise (0..1). */
+  promisesMetRate: number;
+  /** Promises kept in the deterministic (no-jitter) run. */
+  promisesMet: number;
+  promisedTotal: number;
+  completed: number;
+  constraintViolations: string[];
+}
+
+export interface ExplorationSummary {
+  scenarioId: string;
+  seed: number;
+  replications: number;
+  candidatesEvaluated: number;
+  /** candidatesEvaluated × replications — the "scenarios run" counter. */
+  runsExecuted: number;
+  best: ExplorationCandidate | null;
+  /** Ranked, bounded (≤ 8). */
+  top: ExplorationCandidate[];
+}
+
+/** UI-facing progress while an exploration is running, chunk by chunk. */
+export interface ExplorationRow {
+  id: string;
+  label: string;
+  /** 0..1 */
+  progress: number;
+  promisesMet: number | null;
+  promisesMetRate: number | null;
+}
+
+export interface ExplorationProgress {
+  status: "idle" | "running" | "done";
+  runsExecuted: number;
+  runsPlanned: number;
+  rows: ExplorationRow[];
+  best: ExplorationCandidate | null;
+}
+
+export const STORY_TRANSITIONS: Record<StoryState, StoryState[]> = {
+  calm: ["escalation"],
+  escalation: ["running", "calm"],
+  running: ["proposal", "escalation"],
+  proposal: ["resolved", "running"],
+  resolved: ["calm"],
+};
+
+export function canTransition(from: StoryState, to: StoryState): boolean {
+  return STORY_TRANSITIONS[from].includes(to);
+}
+

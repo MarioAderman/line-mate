@@ -89,7 +89,7 @@ describe("reads", () => {
     );
     expect(data.steps[0].technicians).toEqual(["Carlos"]);
     expect(data.feasibility.blockedRoute).toBe(true);
-    expect(data.feasibility.slackMinutes).toBe(225 - 100);
+    expect(data.feasibility.slackMinutes).toBe(225 - 90);
   });
 
   it("get_simulation_results refuses before a run and answers after", () => {

@@ -9,10 +9,13 @@
 import {
   BASELINE_SCENARIO_ID,
   FIXTURE_CREATED_AT,
+  calmFixture,
   workshopFixture,
   type Actor,
   type Change,
+  type Disruption,
   type Scenario,
+  type ShiftNote,
 } from "@/domain";
 import type { SimulationResult } from "@/simulation";
 
@@ -23,6 +26,10 @@ export interface WorkshopState {
   simulations: Record<string, SimulationResult>;
   /** Newest first. Drives the attributed activity strip. */
   changes: Change[];
+  /** Disruptions applied so far, keyed by scenario id (demo: the part delay). */
+  disruptions: Record<string, Disruption[]>;
+  /** Notes "sent" to the team — rendered state, never delivered anywhere. */
+  notes: ShiftNote[];
   /** Monotonic counter used to mint ids without a clock or randomness. */
   sequence: number;
 }
@@ -38,12 +45,24 @@ export const SEED_CHANGE: Change = {
   after: null,
 };
 
-export function createInitialState(): WorkshopState {
+export interface InitialStateOptions {
+  /**
+   * "escalated" (default) opens on the demo baseline with the part delay already
+   * applied — what the tests and the agent tools assume. "calm" opens on the
+   * same scenario before the delay, so the story can inject it live.
+   */
+  story?: "calm" | "escalated";
+}
+
+export function createInitialState(options: InitialStateOptions = {}): WorkshopState {
+  const calm = options.story === "calm";
   return {
-    scenarios: [workshopFixture()],
+    scenarios: [calm ? calmFixture() : workshopFixture()],
     activeScenarioId: BASELINE_SCENARIO_ID,
     simulations: {},
     changes: [SEED_CHANGE],
+    disruptions: {},
+    notes: [],
     sequence: 1,
   };
 }

@@ -2,78 +2,88 @@
 @import "@xyflow/react/dist/style.css";
 
 /*
- * Design tokens — docs/design-system.md v0.1.
- * One instrument surface, semantic colour only. The direction study
- * (Annunciator / Blueprint / Traffic) is still open; everything visual
- * hangs off these tokens so a decision is a one-file change.
+ * Design tokens — S1 Blueprint (chosen by Mario, 2026-08-29; canvas d14699c0, page 2).
+ * Drafting paper, ink lines, one alarm colour, one attention colour, one agent
+ * colour. Every component reads these; nothing declares its own palette.
  */
 :root {
-  --graphite: #101820;
-  --graphite-2: #0b1218;
-  --slate: #1b2a34;
-  --slate-2: #223540;
-  --porcelain: #e7ecebff;
-  --porcelain-dim: #9fb0b5;
-  --line: #2b3f4b;
-  --line-strong: #3a5362;
-  --coolant: #5ed3c5;
-  --amber: #f2a63b;
-  --coral: #e46a54;
-  --agent: #b9a7ff;
+  --paper: #e8edf2;
+  --paper-2: #f4f7fa;
+  --sheet: #ffffff;
+  --grid: rgba(31, 47, 63, 0.08);
+  --ink: #1f2f3f;
+  --ink-2: #4f6478;
+  --ink-3: #7f93a6;
+  --rule: #b9c6d3;
+  --rule-2: #8fa3b6;
+  --alarm: #b5322a;
+  --alarm-wash: #fbf1ef;
+  --warn: #b97a00;
+  --warn-wash: #fbf6ea;
+  --agent: #2f5f8f;
+  --agent-wash: #eef3f8;
 
-  --background: var(--graphite);
-  --foreground: var(--porcelain);
+  --background: var(--paper);
+  --foreground: var(--ink);
 }
 
 @theme inline {
-  --color-graphite: var(--graphite);
-  --color-graphite-2: var(--graphite-2);
-  --color-slate: var(--slate);
-  --color-slate-2: var(--slate-2);
-  --color-porcelain: var(--porcelain);
-  --color-porcelain-dim: var(--porcelain-dim);
-  --color-line: var(--line);
-  --color-line-strong: var(--line-strong);
-  --color-coolant: var(--coolant);
-  --color-amber: var(--amber);
-  --color-coral: var(--coral);
+  --color-paper: var(--paper);
+  --color-paper-2: var(--paper-2);
+  --color-sheet: var(--sheet);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-rule: var(--rule);
+  --color-rule-2: var(--rule-2);
+  --color-alarm: var(--alarm);
+  --color-alarm-wash: var(--alarm-wash);
+  --color-warn: var(--warn);
+  --color-warn-wash: var(--warn-wash);
   --color-agent: var(--agent);
+  --color-agent-wash: var(--agent-wash);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-display: var(--font-display), "Barlow Condensed", "Arial Narrow", sans-serif;
-  --font-sans: var(--font-body), "Barlow", system-ui, sans-serif;
+  --font-display: var(--font-mono), "IBM Plex Mono", ui-monospace, monospace;
+  --font-sans: var(--font-body), "IBM Plex Sans", system-ui, sans-serif;
   --font-mono: var(--font-mono), "IBM Plex Mono", ui-monospace, monospace;
+  --radius-sheet: 2px;
 }
 
 html {
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 body {
-  background: var(--background);
+  background-color: var(--background);
+  /* Drafting-paper grid: 20 px minor squares, drawn once, never per component. */
+  background-image:
+    linear-gradient(var(--grid) 0.5px, transparent 0.5px),
+    linear-gradient(90deg, var(--grid) 0.5px, transparent 0.5px);
+  background-size: 20px 20px;
   color: var(--foreground);
   font-family: var(--font-sans);
   font-variant-numeric: tabular-nums;
 }
 
 :focus-visible {
-  outline: 2px solid var(--coolant);
+  outline: 2px solid var(--agent);
   outline-offset: 2px;
 }
 
-/* Engraved uppercase label used for every panel caption. */
+/* Blueprint label: monospaced caps, tracked. */
 .hmi-label {
   font-family: var(--font-display);
   font-weight: 600;
   font-size: 0.72rem;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: var(--porcelain-dim);
+  color: var(--ink-3);
 }
 
 .hmi-panel {
-  background: var(--slate);
-  border: 1px solid var(--line);
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
 }
 
 .hmi-button {
@@ -82,52 +92,52 @@ body {
   font-size: 0.85rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  border: 1px solid var(--line-strong);
-  background: var(--slate-2);
-  color: var(--porcelain);
+  border: 1px solid var(--rule-2);
+  background: var(--sheet);
+  color: var(--ink);
   padding: 0.5rem 0.9rem;
   cursor: pointer;
   transition: background-color 120ms ease, border-color 120ms ease;
 }
 .hmi-button:hover {
-  background: #2a4250;
-  border-color: var(--coolant);
+  background: var(--agent-wash);
+  border-color: var(--agent);
 }
 .hmi-button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
 .hmi-button--primary {
-  border-color: var(--amber);
-  color: var(--amber);
+  border-color: var(--ink);
+  color: var(--ink);
 }
 .hmi-button--primary:hover {
-  background: #3a2c12;
+  background: var(--paper);
 }
 
 .hmi-select,
 .hmi-input {
   font-family: var(--font-mono);
   font-size: 0.8rem;
-  background: var(--graphite-2);
-  border: 1px solid var(--line-strong);
-  color: var(--porcelain);
+  background: var(--sheet);
+  border: 1px solid var(--rule-2);
+  color: var(--ink);
   padding: 0.35rem 0.5rem;
   width: 100%;
 }
 
 /* React Flow chrome: the floor should not look like a diagramming tool. */
 .react-flow {
-  --xy-background-color: var(--graphite-2);
-  --xy-edge-stroke: var(--line-strong);
-  --xy-edge-stroke-selected: var(--coolant);
+  --xy-background-color: var(--paper-2);
+  --xy-edge-stroke: var(--rule-2);
+  --xy-edge-stroke-selected: var(--agent);
   --xy-attribution-background-color: transparent;
 }
 .react-flow__node {
   font-family: inherit;
 }
 .react-flow__attribution {
-  color: var(--porcelain-dim);
+  color: var(--ink-3);
   font-size: 9px;
 }
 .react-flow__attribution a {
@@ -139,18 +149,18 @@ body {
 }
 .react-flow__controls {
   box-shadow: none;
-  border: 1px solid var(--line);
+  border: 1px solid var(--rule);
 }
 .react-flow__controls-button {
-  background: var(--slate);
-  border-bottom: 1px solid var(--line);
-  fill: var(--porcelain);
+  background: var(--sheet);
+  border-bottom: 1px solid var(--rule);
+  fill: var(--ink);
 }
 .react-flow__controls-button:hover {
-  background: var(--slate-2);
+  background: var(--paper-2);
 }
 .react-flow__edge.flowing .react-flow__edge-path {
-  stroke: var(--coolant);
+  stroke: var(--agent);
   stroke-dasharray: 6 6;
   animation: hmi-dash 900ms linear infinite;
 }

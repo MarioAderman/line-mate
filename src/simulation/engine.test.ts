@@ -266,7 +266,7 @@ describe("the demo story", () => {
   it("the agent plan keeps five of six", () => {
     const result = simulate(agentPlan);
     expect(result.totals.promisesMet).toBe(AGENT_PLAN.expectedPromisesMet);
-    expect(result.totals.lateWorkItems).toEqual(["veh-03"]);
+    expect(result.totals.lateWorkItems).toEqual(["veh-05"]);
   });
 
   it("the human decision on top of the agent plan keeps all six", () => {

@@ -8,6 +8,7 @@
  * byte-identical.
  */
 import { ScenarioSchema, type ProcessStep, type Scenario } from "./types";
+import { PART_DELAY, applyDisruption } from "./disruptions";
 
 export const BASELINE_SCENARIO_ID = "SCN-BASELINE";
 export const FIXTURE_CREATED_AT = "2026-08-28T14:15:00.000Z";
@@ -28,8 +29,7 @@ const step = (
 const baseline: Scenario = ScenarioSchema.parse({
   id: BASELINE_SCENARIO_ID,
   name: "Baseline",
-  description:
-    "The schedule as the shop is running it right now. Bay 3 is waiting on a part.",
+  description: "The schedule as the shop is running it right now.",
   createdAt: FIXTURE_CREATED_AT,
   parentId: null,
   clock: { dayLabel: "Friday", startMinute: SHIFT_START, endMinute: SHIFT_END },
@@ -67,9 +67,9 @@ const baseline: Scenario = ScenarioSchema.parse({
       capacity: 1,
       availability: 1,
       costPerHour: 18,
-      status: "blocked",
-      blockedUntilMinute: t(15, 30),
-      blockingReason: "Waiting for a water pump — supplier ETA 15:30",
+      status: "idle",
+      blockedUntilMinute: null,
+      blockingReason: null,
     },
     {
       id: "diag-1",
@@ -171,7 +171,7 @@ const baseline: Scenario = ScenarioSchema.parse({
       arrivalMinute: t(14, 10),
       dueMinute: t(18, 0),
       revenue: 410,
-      steps: [step("Shocks & bushings", 100, "suspension")],
+      steps: [step("Shocks & bushings", 90, "suspension")],
       status: "waiting",
       route: { resourceId: "bay-3", position: null },
     },
@@ -183,7 +183,7 @@ const baseline: Scenario = ScenarioSchema.parse({
       arrivalMinute: t(14, 12),
       dueMinute: t(17, 30),
       revenue: 210,
-      steps: [step("Brake inspection", 30, "brakes"), step("Rear pads", 60, "brakes")],
+      steps: [step("Brake inspection", 20, "brakes"), step("Rear pads", 60, "brakes")],
       status: "waiting",
       route: { resourceId: null, position: null },
     },
@@ -256,16 +256,33 @@ const baseline: Scenario = ScenarioSchema.parse({
       arrivalMinute: t(11, 30),
       dueMinute: null,
       revenue: 380,
-      steps: [step("Water pump replacement", 60, "general")],
-      status: "blocked",
+      // Calm: the pump is fitted and the job is in its final checks. The part
+      // delay (disruptions.ts) resets this to a full 60-minute replacement.
+      steps: [step("Water pump · final checks", 10, "general")],
+      status: "waiting",
       route: { resourceId: "bay-3", position: 1 },
     },
   ],
 });
 
-/** Deep clone so callers can never mutate the shared fixture. */
+/**
+ * The calm shop at 14:15: same cars, same promises, the water pump on time so
+ * Bay 3 is working. This is what the opening question sees.
+ */
+export function calmFixture(): Scenario {
+  const calm = structuredClone(baseline);
+  calm.description = "Friday 14:15. Six customer promises before closing; the floor is on plan.";
+  return calm;
+}
+
+/**
+ * The escalated baseline used by the demo: the calm shop plus the part delay.
+ * Deep clone so callers can never mutate the shared fixture.
+ */
 export function workshopFixture(): Scenario {
-  return structuredClone(baseline);
+  const escalated = applyDisruption(calmFixture(), PART_DELAY);
+  escalated.description = "The schedule as the shop is running it right now. Bay 3 is waiting on a part.";
+  return escalated;
 }
 
 /** The six customer promises, in due order. Handy for tests and the UI. */

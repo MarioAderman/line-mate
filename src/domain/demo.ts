@@ -6,16 +6,10 @@
  * These are schedule changes only — no overtime, no extra technicians, no
  * cancelled jobs — and each beat is applied on top of the previous one.
  */
-import type { Scenario } from "./types";
+import type { Plan, PlanChange, Scenario } from "./types";
 
-export type ScheduleChange =
-  | { command: "update_work_item"; workItemId: string; priority: number }
-  | {
-      command: "route_work_item";
-      workItemId: string;
-      resourceId: string | null;
-      position: number | null;
-    };
+/** Alias kept for the simulation tests; the canonical type is `PlanChange`. */
+export type ScheduleChange = PlanChange;
 
 export interface DemoBeat {
   id: "agent-plan" | "human-decision";
@@ -44,7 +38,7 @@ export const AGENT_PLAN: DemoBeat = {
   expectedPromisesMet: 5,
 };
 
-/** Beat 3: the manager puts the white SUV into Bay 3 the moment it opens. */
+/** Beat 3: the manager puts the white SUV into Bay 3 the moment it opens (frees Bay 2 for the wagon). */
 export const HUMAN_DECISION: DemoBeat = {
   id: "human-decision",
   scenarioName: "Human + agent",
@@ -78,3 +72,12 @@ export function applyScheduleChange(scenario: Scenario, change: ScheduleChange):
 export function applyDemoBeat(scenario: Scenario, beat: DemoBeat): Scenario {
   return beat.changes.reduce(applyScheduleChange, scenario);
 }
+
+/** A beat as the plan the commands and the exploration engine work with. */
+export function planFromBeat(beat: DemoBeat): Plan {
+  return { id: `PLAN-${beat.id}`, label: beat.scenarioName, changes: beat.changes };
+}
+
+export const AGENT_PLAN_AS_PLAN: Plan = planFromBeat(AGENT_PLAN);
+export const HUMAN_DECISION_AS_PLAN: Plan = planFromBeat(HUMAN_DECISION);
+

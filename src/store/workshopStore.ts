@@ -12,7 +12,15 @@
  */
 import { useMemo } from "react";
 import { create } from "zustand";
-import type { Actor, Scenario, Selection } from "@/domain";
+import type {
+  Actor,
+  ExplorationProgress,
+  Scenario,
+  Selection,
+  StoryState,
+  View,
+} from "@/domain";
+import { canTransition } from "@/domain";
 import {
   createInitialState,
   executeCommand,
@@ -24,6 +32,29 @@ import type { SimulationResult } from "@/simulation";
 
 export type McpStatus = "detecting" | "linked" | "unsupported" | "error";
 
+/** Anchored, ephemeral detail shown on hover/click of any floor component. */
+export interface Popover {
+  target: Selection;
+  /** Viewport px, where the popover should anchor. */
+  x: number;
+  y: number;
+}
+
+/** The two real ChatGPT-desktop browser panes we design for. */
+export type ViewportPreset = "laptop" | "monitor";
+export const VIEWPORTS: Record<ViewportPreset, { width: number; height: number }> = {
+  laptop: { width: 1160, height: 865 },
+  monitor: { width: 1567, height: 995 },
+};
+
+export const IDLE_EXPLORATION: ExplorationProgress = {
+  status: "idle",
+  runsExecuted: 0,
+  runsPlanned: 0,
+  rows: [],
+  best: null,
+};
+
 export interface WorkshopStore extends WorkshopState {
   /** Entity shown in the inspector. */
   selection: Selection | null;
@@ -34,11 +65,25 @@ export interface WorkshopStore extends WorkshopState {
   mcpStatus: McpStatus;
   mcpToolCount: number;
   lastResult: CommandResult | null;
+  /** Board (opening view) or Floor (isometric). View state, not world state. */
+  view: View;
+  /** Which demo beat the screen is presenting. Transitions follow STORY_TRANSITIONS. */
+  story: StoryState;
+  /** Progress of the running `explore_schedules` call, for the scenarios panel. */
+  exploration: ExplorationProgress;
+  popover: Popover | null;
+  viewport: ViewportPreset;
 
   run(name: string, input?: unknown, actor?: Actor): CommandResult;
   select(selection: Selection | null): void;
   setPlaybackMinute(minute: number | null): void;
   setMcpStatus(status: McpStatus, toolCount?: number): void;
+  setView(view: View): void;
+  /** Returns false (and does nothing) when the transition is not allowed. */
+  setStory(story: StoryState): boolean;
+  setExploration(progress: ExplorationProgress): void;
+  setPopover(popover: Popover | null): void;
+  setViewport(viewport: ViewportPreset): void;
 }
 
 export const useWorkshopStore = create<WorkshopStore>((set, get) => ({
@@ -49,6 +94,11 @@ export const useWorkshopStore = create<WorkshopStore>((set, get) => ({
   mcpStatus: "detecting",
   mcpToolCount: 0,
   lastResult: null,
+  view: "board",
+  story: "escalation",
+  exploration: IDLE_EXPLORATION,
+  popover: null,
+  viewport: "laptop",
 
   run: (name, input = {}, actor: Actor = "human") => {
     const ctx: CommandContext = {
@@ -74,6 +124,16 @@ export const useWorkshopStore = create<WorkshopStore>((set, get) => ({
   },
   select: (selection) => set({ selection }),
   setPlaybackMinute: (playbackMinute) => set({ playbackMinute }),
+  setView: (view) => set({ view, popover: null }),
+  setStory: (story) => {
+    const current = get().story;
+    if (story !== current && !canTransition(current, story)) return false;
+    set({ story });
+    return true;
+  },
+  setExploration: (exploration) => set({ exploration }),
+  setPopover: (popover) => set({ popover }),
+  setViewport: (viewport) => set({ viewport }),
   setMcpStatus: (mcpStatus, toolCount) =>
     set((state) => ({ mcpStatus, mcpToolCount: toolCount ?? state.mcpToolCount })),
 }));
