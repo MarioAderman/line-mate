@@ -1,0 +1,170 @@
+@import "tailwindcss";
+@import "@xyflow/react/dist/style.css";
+
+/*
+ * Design tokens — docs/design-system.md v0.1.
+ * One instrument surface, semantic colour only. The direction study
+ * (Annunciator / Blueprint / Traffic) is still open; everything visual
+ * hangs off these tokens so a decision is a one-file change.
+ */
+:root {
+  --graphite: #101820;
+  --graphite-2: #0b1218;
+  --slate: #1b2a34;
+  --slate-2: #223540;
+  --porcelain: #e7ecebff;
+  --porcelain-dim: #9fb0b5;
+  --line: #2b3f4b;
+  --line-strong: #3a5362;
+  --coolant: #5ed3c5;
+  --amber: #f2a63b;
+  --coral: #e46a54;
+  --agent: #b9a7ff;
+
+  --background: var(--graphite);
+  --foreground: var(--porcelain);
+}
+
+@theme inline {
+  --color-graphite: var(--graphite);
+  --color-graphite-2: var(--graphite-2);
+  --color-slate: var(--slate);
+  --color-slate-2: var(--slate-2);
+  --color-porcelain: var(--porcelain);
+  --color-porcelain-dim: var(--porcelain-dim);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-coolant: var(--coolant);
+  --color-amber: var(--amber);
+  --color-coral: var(--coral);
+  --color-agent: var(--agent);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-display: var(--font-display), "Barlow Condensed", "Arial Narrow", sans-serif;
+  --font-sans: var(--font-body), "Barlow", system-ui, sans-serif;
+  --font-mono: var(--font-mono), "IBM Plex Mono", ui-monospace, monospace;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+}
+
+:focus-visible {
+  outline: 2px solid var(--coolant);
+  outline-offset: 2px;
+}
+
+/* Engraved uppercase label used for every panel caption. */
+.hmi-label {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.72rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--porcelain-dim);
+}
+
+.hmi-panel {
+  background: var(--slate);
+  border: 1px solid var(--line);
+}
+
+.hmi-button {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.85rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  border: 1px solid var(--line-strong);
+  background: var(--slate-2);
+  color: var(--porcelain);
+  padding: 0.5rem 0.9rem;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+.hmi-button:hover {
+  background: #2a4250;
+  border-color: var(--coolant);
+}
+.hmi-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.hmi-button--primary {
+  border-color: var(--amber);
+  color: var(--amber);
+}
+.hmi-button--primary:hover {
+  background: #3a2c12;
+}
+
+.hmi-select,
+.hmi-input {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  background: var(--graphite-2);
+  border: 1px solid var(--line-strong);
+  color: var(--porcelain);
+  padding: 0.35rem 0.5rem;
+  width: 100%;
+}
+
+/* React Flow chrome: the floor should not look like a diagramming tool. */
+.react-flow {
+  --xy-background-color: var(--graphite-2);
+  --xy-edge-stroke: var(--line-strong);
+  --xy-edge-stroke-selected: var(--coolant);
+  --xy-attribution-background-color: transparent;
+}
+.react-flow__node {
+  font-family: inherit;
+}
+.react-flow__attribution {
+  color: var(--porcelain-dim);
+  font-size: 9px;
+}
+.react-flow__attribution a {
+  color: inherit;
+}
+.react-flow__handle {
+  opacity: 0;
+  pointer-events: none;
+}
+.react-flow__controls {
+  box-shadow: none;
+  border: 1px solid var(--line);
+}
+.react-flow__controls-button {
+  background: var(--slate);
+  border-bottom: 1px solid var(--line);
+  fill: var(--porcelain);
+}
+.react-flow__controls-button:hover {
+  background: var(--slate-2);
+}
+.react-flow__edge.flowing .react-flow__edge-path {
+  stroke: var(--coolant);
+  stroke-dasharray: 6 6;
+  animation: hmi-dash 900ms linear infinite;
+}
+@keyframes hmi-dash {
+  to {
+    stroke-dashoffset: -12;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .react-flow__edge.flowing .react-flow__edge-path {
+    animation: none;
+  }
+  * {
+    transition-duration: 0ms !important;
+  }
+}
