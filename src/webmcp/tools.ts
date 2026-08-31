@@ -12,7 +12,9 @@ import type { WebMcpTool, WebMcpToolResult } from "./types";
 
 /**
  * The agent-facing surface (docs/webmcp-tools.md). A subset of the command
- * registry on purpose: `activate_scenario` only moves the human's own view.
+ * registry on purpose: `activate_scenario` only moves the human's own view,
+ * and `inject_event` is a demo control — the agent discovers the disruption
+ * by inspecting the floor, it does not get to cause one.
  */
 export const WEBMCP_TOOL_NAMES = [
   "inspect_system",
@@ -24,7 +26,10 @@ export const WEBMCP_TOOL_NAMES = [
   "update_resource",
   "update_work_item",
   "route_work_item",
+  "apply_plan",
+  "post_shift_note",
   "run_simulation",
+  "explore_schedules",
 ] as const;
 
 export type WebMcpToolName = (typeof WEBMCP_TOOL_NAMES)[number];

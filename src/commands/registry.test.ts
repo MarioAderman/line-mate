@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { AGENT_PLAN, BASELINE_SCENARIO_ID, HUMAN_DECISION, type DemoBeat } from "@/domain";
-import { createMemoryContext, type CommandContext } from "./state";
+import {
+  AGENT_PLAN,
+  BASELINE_SCENARIO_ID,
+  HUMAN_DECISION,
+  PART_DELAY,
+  planFromBeat,
+  workshopFixture,
+  type DemoBeat,
+  type ExplorationSummary,
+  type ShiftNote,
+} from "@/domain";
+import { simulate } from "@/simulation";
+import { createInitialState, createMemoryContext, type CommandContext } from "./state";
 import { COMMAND_NAMES, executeCommand, type MutationReceipt } from "./registry";
 
 const AGENT_TOOLS = [
@@ -13,8 +24,14 @@ const AGENT_TOOLS = [
   "update_resource",
   "update_work_item",
   "route_work_item",
+  "apply_plan",
+  "post_shift_note",
   "run_simulation",
+  "explore_schedules",
 ];
+
+/** Commands the person at the screen drives; never registered for the agent. */
+const HUMAN_ONLY = ["activate_scenario", "inject_event", "reset_demo"];
 
 function ok<T = Record<string, unknown>>(result: ReturnType<typeof executeCommand>): T {
   if (!result.ok) throw new Error(`expected success, got: ${result.error}`);
@@ -37,10 +54,9 @@ function applyBeat(ctx: CommandContext, beat: DemoBeat, scenarioId: string) {
 }
 
 describe("registry", () => {
-  it("exposes the v0.1 tool set plus the human-only view switch", () => {
-    expect([...COMMAND_NAMES].sort()).toEqual(
-      [...AGENT_TOOLS, "activate_scenario", "reset_demo"].sort(),
-    );
+  it("exposes the thirteen agent tools plus the human-only commands", () => {
+    expect(AGENT_TOOLS).toHaveLength(13);
+    expect([...COMMAND_NAMES].sort()).toEqual([...AGENT_TOOLS, ...HUMAN_ONLY].sort());
   });
 
   it("rejects unknown commands without throwing", () => {
@@ -301,5 +317,323 @@ describe("attribution", () => {
     ok(executeCommand(ctx, "activate_scenario", { scenarioId }));
     expect(ctx.state.activeScenarioId).toBe(scenarioId);
     expect(ctx.state.changes).toHaveLength(before);
+  });
+});
+
+describe("inject_event", () => {
+  it("turns the calm shop into the escalated baseline", () => {
+    const ctx = createMemoryContext("human", createInitialState({ story: "calm" }));
+    ok(executeCommand(ctx, "inject_event", { disruption: PART_DELAY }));
+    const escalated = ctx.state.scenarios[0];
+    // Same world the demo baseline hands out, reached by playing the story.
+    expect({ ...escalated, description: "" }).toEqual({ ...workshopFixture(), description: "" });
+    expect(simulate(escalated).totals.promisesMet).toBe(4);
+  });
+
+  it("records the disruption, attributes it, and drops the stale run", () => {
+    const ctx = createMemoryContext("simulation", createInitialState({ story: "calm" }));
+    ok(executeCommand(ctx, "run_simulation", {}));
+    expect(ctx.state.simulations[BASELINE_SCENARIO_ID]).toBeDefined();
+
+    const data = ok<MutationReceipt>(executeCommand(ctx, "inject_event", { disruption: PART_DELAY }));
+    expect(data.simulationInvalidated).toBe(true);
+    expect(ctx.state.simulations[BASELINE_SCENARIO_ID]).toBeUndefined();
+    expect(ctx.state.disruptions[BASELINE_SCENARIO_ID]).toEqual([PART_DELAY]);
+    expect(data.before).toEqual({ status: "idle", blockedUntilMinute: null, blockingReason: null });
+    expect(data.after).toMatchObject({ status: "blocked", blockedUntilMinute: 15 * 60 + 30 });
+    expect(data.summary).toContain("Part delay on Bay 3");
+    expect(data.summary).toContain("15:30");
+    expect(ctx.state.changes[0]).toMatchObject({ actor: "simulation", command: "inject_event" });
+  });
+
+  it("is a demo control the agent cannot fire", () => {
+    const ctx = createMemoryContext("agent", createInitialState({ story: "calm" }));
+    expect(fail(executeCommand(ctx, "inject_event", { disruption: PART_DELAY }))).toContain(
+      "demo control",
+    );
+    expect(ctx.state.scenarios[0].resources.find((r) => r.id === "bay-3")!.status).toBe("idle");
+  });
+
+  it("refuses a disruption aimed at something that is not there", () => {
+    const ctx = createMemoryContext("human", createInitialState({ story: "calm" }));
+    const error = fail(
+      executeCommand(ctx, "inject_event", { disruption: { ...PART_DELAY, resourceId: "bay-9" } }),
+    );
+    expect(error).toContain("bay-9");
+    expect(error).toContain("bay-1");
+  });
+});
+
+describe("explore_schedules", () => {
+  it("returns the same ranking for the same seed", () => {
+    const first = ok<ExplorationSummary>(
+      executeCommand(createMemoryContext("agent"), "explore_schedules", { seed: 7, replications: 6 }),
+    );
+    const second = ok<ExplorationSummary>(
+      executeCommand(createMemoryContext("agent"), "explore_schedules", { seed: 7, replications: 6 }),
+    );
+    expect(JSON.stringify({ ...first, changeId: 0 })).toBe(JSON.stringify({ ...second, changeId: 0 }));
+  });
+
+  it("finds a plan that keeps all six promises", () => {
+    const data = ok<ExplorationSummary>(
+      executeCommand(createMemoryContext("agent"), "explore_schedules", {}),
+    );
+    expect(data.best!.promisesMet).toBe(6);
+    expect(data.best!.promisedTotal).toBe(6);
+    expect(data.runsExecuted).toBe(data.candidatesEvaluated * data.replications);
+  });
+
+  it("returns a shortlist, not the whole search", () => {
+    const data = ok<ExplorationSummary>(
+      executeCommand(createMemoryContext("agent"), "explore_schedules", { replications: 4 }),
+    );
+    expect(data.top.length).toBeLessThanOrEqual(8);
+    expect(data.candidatesEvaluated).toBeGreaterThan(data.top.length);
+    expect(JSON.stringify(data).length).toBeLessThan(20_000);
+  });
+
+  it("records one attributed change quoting the measured result", () => {
+    const ctx = createMemoryContext("agent");
+    const before = ctx.state.changes.length;
+    const data = ok<ExplorationSummary>(executeCommand(ctx, "explore_schedules", { replications: 4 }));
+    expect(ctx.state.changes).toHaveLength(before + 1);
+    const change = ctx.state.changes[0];
+    expect(change).toMatchObject({ actor: "agent", command: "explore_schedules" });
+    expect(change.summary).toContain(`Explored ${data.candidatesEvaluated} schedules`);
+    expect(change.summary).toContain(
+      `best ${data.best!.promisesMet}/${data.best!.promisedTotal}`,
+    );
+    // The headline quotes the measured rate; no number is hardcoded anywhere.
+    expect(change.summary).toContain(
+      `${Math.round(data.best!.promisesMetRate * 100)} % of runs`,
+    );
+  });
+
+  it("leaves the world exactly as it found it", () => {
+    const ctx = createMemoryContext("agent");
+    const before = JSON.stringify(ctx.state.scenarios);
+    ok(executeCommand(ctx, "explore_schedules", { replications: 4 }));
+    expect(JSON.stringify(ctx.state.scenarios)).toBe(before);
+  });
+});
+
+describe("apply_plan", () => {
+  it("applies a whole plan as one attributed change and reaches 6/6", () => {
+    const ctx = createMemoryContext("human");
+    const agentPlan = planFromBeat(AGENT_PLAN);
+    const before = ctx.state.changes.length;
+    const receipt = ok<MutationReceipt & { changesApplied: number; workItemsTouched: string[] }>(
+      executeCommand(ctx, "apply_plan", { plan: agentPlan }),
+    );
+    expect(receipt.changesApplied).toBe(agentPlan.changes.length);
+    expect(receipt.workItemsTouched).toContain("veh-05");
+    expect(ctx.state.changes).toHaveLength(before + 1);
+    expect(receipt.summary).toContain("Agent plan");
+    expect(receipt.summary).toContain("6 priority changes");
+    expect(simulate(ctx.state.scenarios[0]).totals.promisesMet).toBe(5);
+
+    ok(executeCommand(ctx, "apply_plan", { plan: planFromBeat(HUMAN_DECISION) }));
+    expect(simulate(ctx.state.scenarios[0]).totals.promisesMet).toBe(6);
+    expect(ctx.state.changes).toHaveLength(before + 2);
+  });
+
+  it("carries a before/after for every work item it touched", () => {
+    const ctx = createMemoryContext("human");
+    const receipt = ok<MutationReceipt>(
+      executeCommand(ctx, "apply_plan", { plan: planFromBeat(HUMAN_DECISION) }),
+    );
+    // Both halves of the manager's decision, each with its own before/after.
+    expect(receipt.before).toEqual({
+      "veh-03": { priority: 3, route: { resourceId: null, position: null } },
+      "veh-12": { priority: 1, route: { resourceId: "bay-3", position: 1 } },
+    });
+    expect(receipt.after).toEqual({
+      "veh-03": { priority: 3, route: { resourceId: "bay-3", position: 1 } },
+      "veh-12": { priority: 1, route: { resourceId: null, position: null } },
+    });
+  });
+
+  it("protects the baseline from the agent and branches cleanly", () => {
+    const ctx = createMemoryContext("agent");
+    expect(fail(executeCommand(ctx, "apply_plan", { plan: planFromBeat(AGENT_PLAN) }))).toContain(
+      "create_scenario",
+    );
+    const { scenarioId } = ok<{ scenarioId: string }>(
+      executeCommand(ctx, "create_scenario", { name: "Agent plan" }),
+    );
+    ok(executeCommand(ctx, "apply_plan", { plan: planFromBeat(AGENT_PLAN), scenarioId }));
+    const baseline = ctx.state.scenarios.find((s) => s.id === BASELINE_SCENARIO_ID)!;
+    expect(baseline.workItems.find((w) => w.id === "veh-05")!.route.resourceId).toBe("bay-3");
+    expect(ctx.state.changes[0]).toMatchObject({ actor: "agent", command: "apply_plan" });
+  });
+
+  it("applies the same validation the individual commands do", () => {
+    const ctx = createMemoryContext("human");
+    const error = fail(
+      executeCommand(ctx, "apply_plan", {
+        plan: {
+          id: "PLAN-BAD",
+          label: "Impossible",
+          changes: [
+            { command: "route_work_item", workItemId: "veh-01", resourceId: "diag-1", position: null },
+          ],
+        },
+      }),
+    );
+    expect(error).toContain("station");
+    // Nothing partially applied: the plan is one change or none.
+    expect(ctx.state.scenarios[0].workItems[0].route.resourceId).toBeNull();
+  });
+
+  it("rejects an empty plan and unknown work items", () => {
+    const ctx = createMemoryContext("human");
+    expect(fail(executeCommand(ctx, "apply_plan", { plan: { id: "P", label: "Empty", changes: [] } }))).toContain(
+      "Invalid input",
+    );
+    expect(
+      fail(
+        executeCommand(ctx, "apply_plan", {
+          plan: {
+            id: "P",
+            label: "Ghost",
+            changes: [{ command: "update_work_item", workItemId: "veh-99", priority: 1 }],
+          },
+        }),
+      ),
+    ).toContain("veh-99");
+  });
+
+  it("carries the plan the exploration recommended, end to end", () => {
+    const ctx = createMemoryContext("agent");
+    const { scenarioId } = ok<{ scenarioId: string }>(
+      executeCommand(ctx, "create_scenario", { name: "Explored" }),
+    );
+    const summary = ok<ExplorationSummary>(executeCommand(ctx, "explore_schedules", { scenarioId }));
+    const best = summary.best!;
+    ok(
+      executeCommand(ctx, "apply_plan", {
+        scenarioId,
+        plan: { id: `PLAN-${best.id}`, label: best.label, changes: best.changes },
+      }),
+    );
+    const branch = ctx.state.scenarios.find((s) => s.id === scenarioId)!;
+    // The searched number and the applied number are the same number.
+    expect(simulate(branch).totals.promisesMet).toBe(best.promisesMet);
+    expect(simulate(branch).totals.promisesMet).toBe(6);
+  });
+});
+
+describe("post_shift_note", () => {
+  it("stores the note with its channels and attributes the author", () => {
+    const ctx = createMemoryContext("agent", undefined, () => 1_700_000_000_000);
+    const data = ok<{ note: ShiftNote; delivered: boolean; simulated: boolean }>(
+      executeCommand(ctx, "post_shift_note", {
+        text: "Bay 3 reopens 15:30. White SUV goes in first; the wagon moves to Bay 2. All six promises hold.",
+        channels: ["slack", "email"],
+        recipients: ["floor-team"],
+      }),
+    );
+    expect(ctx.state.notes).toHaveLength(1);
+    expect(ctx.state.notes[0]).toEqual(data.note);
+    expect(data.note.channels).toEqual(["slack", "email"]);
+    expect(data.note.recipients).toEqual(["floor-team"]);
+    expect(data.note.author).toBe("agent");
+    expect(data.note.at).toBe(1_700_000_000_000);
+    expect(data.note.scenarioId).toBe(BASELINE_SCENARIO_ID);
+  });
+
+  it("keeps notes newest first, the way the resolved card reads them", () => {
+    const ctx = createMemoryContext("human");
+    ok(executeCommand(ctx, "post_shift_note", { text: "First note.", channels: ["slack"] }));
+    const second = ok<{ note: ShiftNote }>(
+      executeCommand(ctx, "post_shift_note", { text: "Second note.", channels: ["slack"] }),
+    );
+    expect(ctx.state.notes).toHaveLength(2);
+    expect(ctx.state.notes[0]).toEqual(second.note);
+    expect(ctx.state.notes[0].text).toBe("Second note.");
+    expect(ctx.state.notes[1].text).toBe("First note.");
+  });
+
+  it("is simulated: nothing is delivered anywhere", () => {
+    const ctx = createMemoryContext("human");
+    const data = ok<{ delivered: boolean; simulated: boolean; summary: string }>(
+      executeCommand(ctx, "post_shift_note", { text: "Shift note.", channels: ["sms"] }),
+    );
+    expect(data.delivered).toBe(false);
+    expect(data.simulated).toBe(true);
+    expect(data.summary).toContain("simulated");
+    expect(ctx.state.changes[0]).toMatchObject({ actor: "human", command: "post_shift_note" });
+  });
+
+  it("de-duplicates channels and refuses a note with none", () => {
+    const ctx = createMemoryContext("human");
+    const data = ok<{ note: ShiftNote }>(
+      executeCommand(ctx, "post_shift_note", { text: "Note.", channels: ["slack", "slack"] }),
+    );
+    expect(data.note.channels).toEqual(["slack"]);
+    expect(fail(executeCommand(ctx, "post_shift_note", { text: "Note.", channels: [] }))).toContain(
+      "Invalid input",
+    );
+    expect(
+      fail(executeCommand(ctx, "post_shift_note", { text: "Note.", channels: ["carrier-pigeon"] })),
+    ).toContain("Invalid input");
+  });
+
+  it("keeps the world out of it — a note changes no schedule", () => {
+    const ctx = createMemoryContext("human");
+    const before = JSON.stringify(ctx.state.scenarios);
+    ok(executeCommand(ctx, "post_shift_note", { text: "Note.", channels: ["slack"] }));
+    expect(JSON.stringify(ctx.state.scenarios)).toBe(before);
+  });
+});
+
+describe("the whole story through the command boundary", () => {
+  it("calm → escalation → exploration → plan → note, every step attributed", () => {
+    const ctx = createMemoryContext("human", createInitialState({ story: "calm" }));
+    expect(simulate(ctx.state.scenarios[0]).totals.promisesMet).toBe(6);
+
+    // Beat 2: the part delay lands (simulation drives it).
+    const sim = { ...ctx, actor: "simulation" as const };
+    ok(executeCommand(sim, "inject_event", { disruption: PART_DELAY }));
+    expect(simulate(ctx.state.scenarios[0]).totals.promisesMet).toBe(4);
+
+    // Beat 3: the agent branches and searches.
+    const agent = { ...ctx, actor: "agent" as const };
+    const { scenarioId } = ok<{ scenarioId: string }>(
+      executeCommand(agent, "create_scenario", { name: "Recovery" }),
+    );
+    const summary = ok<ExplorationSummary>(executeCommand(agent, "explore_schedules", { scenarioId }));
+
+    // Beats 4-5: the agent applies the winning plan and tells the team.
+    ok(
+      executeCommand(agent, "apply_plan", {
+        scenarioId,
+        plan: {
+          id: "PLAN-RECOVERY",
+          label: summary.best!.label,
+          changes: summary.best!.changes,
+        },
+      }),
+    );
+    const run = ok<{ totals: { promisesMet: number } }>(
+      executeCommand(agent, "run_simulation", { scenarioId }),
+    );
+    expect(run.totals.promisesMet).toBe(6);
+    ok(
+      executeCommand(agent, "post_shift_note", {
+        scenarioId,
+        text: `Recovery applied: ${summary.best!.label}. All six promises hold.`,
+        channels: ["slack", "email"],
+      }),
+    );
+
+    const commands = ctx.state.changes.map((c) => `${c.actor}:${c.command}`);
+    expect(commands).toContain("simulation:inject_event");
+    expect(commands).toContain("agent:explore_schedules");
+    expect(commands).toContain("agent:apply_plan");
+    expect(commands).toContain("agent:post_shift_note");
+    // The baseline the human still looks at was never touched by the agent.
+    expect(simulate(ctx.state.scenarios[0]).totals.promisesMet).toBe(4);
   });
 });
