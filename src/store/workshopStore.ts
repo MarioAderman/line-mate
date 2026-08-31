@@ -83,6 +83,8 @@ export interface WorkshopStore extends WorkshopState {
   humanEdited: string[];
   /** Work items the agent retargeted inside the draft, via WebMCP. */
   agentEdited: string[];
+  /** The scenario the draft proposes changes for — set when the draft lands. */
+  draftScenarioId: string | null;
   /** Why the last apply was refused — null when the plan has not been tried. */
   applyError: string | null;
 
@@ -115,6 +117,7 @@ export const RESET_VIEW = {
   draft: null,
   humanEdited: [],
   agentEdited: [],
+  draftScenarioId: null,
   applyError: null,
 } satisfies Partial<WorkshopStore>;
 
@@ -140,6 +143,7 @@ export const useWorkshopStore = create<WorkshopStore>((set, get) => ({
   draft: null,
   humanEdited: [],
   agentEdited: [],
+  draftScenarioId: null,
   applyError: null,
 
   run: (name, input = {}, actor: Actor = "human") => {
@@ -155,8 +159,12 @@ export const useWorkshopStore = create<WorkshopStore>((set, get) => ({
         scenarioId?: string;
       };
       const state = get();
-      const targetsActive = !raw.scenarioId || raw.scenarioId === state.activeScenarioId;
-      if (targetsActive && state.draft && raw.workItemId) {
+      // Anchor on the scenario the draft PROPOSES for, not on whatever is
+      // active: live test 4 showed the agent activating its own branch and
+      // then routing it — that must stay a world mutation, or its experiment
+      // silently becomes a draft edit (it did, twice).
+      const target = raw.scenarioId ?? state.activeScenarioId;
+      if (target === state.draftScenarioId && state.draft && raw.workItemId) {
         const patch = draftRoutePatch(
           state,
           raw.workItemId,
@@ -231,9 +239,17 @@ export const useWorkshopStore = create<WorkshopStore>((set, get) => ({
   setViewport: (viewport) => set({ viewport }),
   setMcpStatus: (mcpStatus, toolCount) =>
     set((state) => ({ mcpStatus, mcpToolCount: toolCount ?? state.mcpToolCount })),
-  setDraft: (draft) => set({ draft, humanEdited: [], agentEdited: [], applyError: null }),
+  setDraft: (draft) =>
+    set({
+      draft,
+      draftScenarioId: draft ? get().activeScenarioId : null,
+      humanEdited: [],
+      agentEdited: [],
+      applyError: null,
+    }),
   setApplyError: (applyError) => set({ applyError }),
-  clearDraft: () => set({ draft: null, humanEdited: [], agentEdited: [], applyError: null }),
+  clearDraft: () =>
+    set({ draft: null, draftScenarioId: null, humanEdited: [], agentEdited: [], applyError: null }),
   routeInDraft: (workItemId, resourceId, position = 1) =>
     set((state) => draftRoutePatch(state, workItemId, resourceId, position, "human") ?? state),
 }));
@@ -284,6 +300,7 @@ function describeDraft(state: WorkshopStore): Record<string, unknown> | null {
   return {
     planId: state.draft.id,
     label: state.draft.label,
+    scenarioId: state.draftScenarioId,
     status:
       "Unapplied draft on the manager's screen — it becomes real only when " +
       "the manager presses Apply & notify team.",
@@ -372,7 +389,13 @@ function advanceStoryAfterCommand(
     const finish = () => {
       set({ exploration: doneFrame(summary) });
       if (applyStory("proposal", get, set) && summary.best && !get().draft) {
-        set({ draft: planFromCandidate(summary.best), humanEdited: [], applyError: null });
+        set({
+          draft: planFromCandidate(summary.best),
+          draftScenarioId: get().activeScenarioId,
+          humanEdited: [],
+          agentEdited: [],
+          applyError: null,
+        });
       }
     };
     const trace = summary.trace ?? [];
@@ -400,7 +423,12 @@ function advanceStoryAfterCommand(
 
   if (name === "apply_plan") {
     if (!get().draft && payload.plan) {
-      set({ draft: structuredClone(payload.plan), applyError: null });
+      set({
+        draft: structuredClone(payload.plan),
+        draftScenarioId:
+          (payload as { scenarioId?: string }).scenarioId ?? get().activeScenarioId,
+        applyError: null,
+      });
     }
     return;
   }

@@ -16,6 +16,7 @@ beforeEach(() => {
     draft: null,
     humanEdited: [],
     agentEdited: [],
+    draftScenarioId: null,
     applyError: null,
   });
 });
@@ -75,6 +76,37 @@ describe("agent edits the visible draft during the proposal", () => {
     expect((result as { data: { draftEdited?: boolean } }).data.draftEdited).toBeUndefined();
     expect((result as { data: { changeId?: string } }).data.changeId).toBeDefined();
     expect(useWorkshopStore.getState().agentEdited).not.toContain("veh-05");
+  });
+
+  it("keeps world semantics on a branch the agent activated (live test 4)", () => {
+    reachProposal();
+    const created = runCommand(
+      "create_scenario",
+      { name: "Agent branch", activate: true },
+      "agent",
+    );
+    expect(created.ok).toBe(true);
+
+    // Bare route now targets the agent's own active branch, not the draft's
+    // scenario — it must land in the world.
+    const result = runCommand(
+      "route_work_item",
+      { workItemId: "veh-05", resourceId: "bay-2" },
+      "agent",
+    );
+    expect(result.ok).toBe(true);
+    expect((result as { data: { draftEdited?: boolean } }).data.draftEdited).toBeUndefined();
+    expect((result as { data: { changeId?: string } }).data.changeId).toBeDefined();
+
+    // Explicitly addressing the draft's scenario still edits the draft.
+    const draftOwner = useWorkshopStore.getState().draftScenarioId!;
+    const edit = runCommand(
+      "route_work_item",
+      { workItemId: "veh-05", resourceId: "bay-1", scenarioId: draftOwner },
+      "agent",
+    );
+    expect(edit.ok).toBe(true);
+    expect((edit as { data: { draftEdited?: boolean } }).data.draftEdited).toBe(true);
   });
 
   it("inspect_system carries the briefing and the draft with authorship", () => {
