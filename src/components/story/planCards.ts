@@ -70,12 +70,17 @@ function priorityCard(changes: PlanChange[], scenario: Scenario): PlanCard {
 function routeCard(change: PlanChange & { command: "route_work_item" }, scenario: Scenario): PlanCard {
   const vehicle = vehicleName(scenario, change.workItemId);
   const target = change.resourceId === null ? null : resourceName(scenario, change.resourceId);
+  // A job that is *in* the blocked bay rolls off it; one merely routed to it
+  // simply stops waiting. Same command, two very different shop-floor moves.
+  const onTheLift = scenario.workItems.find((w) => w.id === change.workItemId)?.status === "blocked";
   return {
     id: `plan-route-${change.workItemId}`,
     title: target === null ? `${vehicle} → any open bay` : `${vehicle} → ${target}`,
     detail:
       target === null
-        ? "Stops waiting for the blocked bay and takes the first one that frees up."
+        ? onTheLift
+          ? "Rolls off the blocked lift and finishes in the first bay that frees up."
+          : "Stops waiting for the blocked bay and takes the first one that frees up."
         : change.position === 1
           ? `First into ${target} the moment it opens.`
           : `Runs in ${target}${change.position === null ? "" : `, position ${change.position}`}.`,

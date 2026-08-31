@@ -18,7 +18,24 @@ function percent(rate: number): string {
   return `${Math.round(rate * 100)} %`;
 }
 
-function Row({ row, running }: { row: ExplorationRow; running: boolean }) {
+/**
+ * "kept in 88 % of 8 runs" — the rate and the sample size always travel
+ * together, so a blunt stub search can never read like a Monte Carlo.
+ */
+function confidence(rate: number, runsPerCandidate: number): string {
+  if (runsPerCandidate <= 1) return "kept every promise in the run";
+  return `kept in ${percent(rate)} of ${runsPerCandidate} runs`;
+}
+
+function Row({
+  row,
+  running,
+  runsPerCandidate,
+}: {
+  row: ExplorationRow;
+  running: boolean;
+  runsPerCandidate: number;
+}) {
   const reduced = useReducedMotion();
   const done = row.progress >= 1;
   const active = !done && running && row.progress > 0;
@@ -55,7 +72,7 @@ function Row({ row, running }: { row: ExplorationRow; running: boolean }) {
       {/* One line per row, always: the list must not jump as rows land. */}
       <div className={`mt-1 font-mono text-[10px] ${active ? "text-agent" : "text-ink-3"}`}>
         {row.promisesMetRate !== null
-          ? `kept in ${percent(row.promisesMetRate)} of runs`
+          ? confidence(row.promisesMetRate, runsPerCandidate)
           : active
             ? "running…"
             : "queued"}
@@ -69,6 +86,11 @@ export function ScenariosPanel() {
   const scenario = useActiveScenario();
   const best = exploration.best;
   const running = exploration.status === "running";
+  // Runs per candidate — the sample every rate on this panel is measured over.
+  const runsPerCandidate =
+    exploration.rows.length > 0
+      ? Math.max(1, Math.round(exploration.runsPlanned / exploration.rows.length))
+      : 1;
 
   return (
     <StoryPanel
@@ -97,12 +119,17 @@ export function ScenariosPanel() {
               best so far{" "}
               <span className="font-mono font-semibold text-ink">
                 {best.promisesMet} / {best.promisedTotal}
-              </span>{" "}
-              in{" "}
-              <span className="font-mono font-semibold text-ink">
-                {percent(best.promisesMetRate)}
-              </span>{" "}
-              of runs
+              </span>
+              {runsPerCandidate > 1 && (
+                <>
+                  {" "}
+                  ·{" "}
+                  <span className="font-mono font-semibold text-ink">
+                    {percent(best.promisesMetRate)}
+                  </span>{" "}
+                  of {runsPerCandidate} runs
+                </>
+              )}
             </>
           ) : (
             <span className="text-ink-3">building candidates…</span>
@@ -111,7 +138,7 @@ export function ScenariosPanel() {
       </div>
       <ul className="divide-y divide-rule" aria-live="polite">
         {exploration.rows.map((row) => (
-          <Row key={row.id} row={row} running={running} />
+          <Row key={row.id} row={row} running={running} runsPerCandidate={runsPerCandidate} />
         ))}
       </ul>
     </StoryPanel>

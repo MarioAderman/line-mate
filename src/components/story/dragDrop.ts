@@ -3,10 +3,15 @@
  * Floor bay). Kept tiny and framework-free so the view streams can accept a
  * drop without importing anything from the story panels.
  *
- * Drop targets: call `readWorkItemDrag(event.dataTransfer)` and, when it
- * returns a payload, route it through the command layer:
+ * Drop targets: call `readWorkItemDrag(event.dataTransfer)` and hand the
+ * payload to `routeFromDrop` — never to `route_work_item` directly:
  *
- *   store.run("route_work_item", { workItemId, resourceId, position: 1 }, "human")
+ *   const drag = readWorkItemDrag(event.dataTransfer);
+ *   if (drag) routeFromDrop(drag.workItemId, resourceId, 1);
+ *
+ * `routeFromDrop` knows the difference the drop target should not have to: in
+ * beat 4 a drop edits the unapplied draft, and at any other moment it is an
+ * ordinary human routing decision on the world, through the command layer.
  */
 export const WORK_ITEM_DRAG_TYPE = "application/x-workshop-work-item";
 

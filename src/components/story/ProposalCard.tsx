@@ -11,32 +11,48 @@
 import { useState } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import { Vehicle } from "@/components/vehicles";
-import { useActiveScenario, useWorkshopStore } from "@/store";
-import { applyAndNotify, useExploration, useProposedPlan } from "@/store/storySlice";
+import { useActiveScenario } from "@/store";
+import {
+  applyAndNotify,
+  routeFromDrop,
+  useApplyError,
+  useDraftPlan,
+  useExploration,
+  useHumanEdited,
+} from "@/store/storySlice";
 import { eligibleResourceIds, planCards, type PlanCard } from "./planCards";
 import { writeWorkItemDrag } from "./dragDrop";
 import { StoryPanel } from "./StoryPanel";
 
 export interface ProposalCardProps {
-  /** Defaults to `route_work_item` on the live world, as the human. */
+  /** Defaults to editing the draft — no scenario is touched before Apply. */
   onRoute?: (workItemId: string, resourceId: string | null) => void;
   onApply?: () => void;
   onLater?: () => void;
 }
 
 function defaultRoute(workItemId: string, resourceId: string | null): void {
-  useWorkshopStore
-    .getState()
-    .run("route_work_item", { workItemId, resourceId, position: 1 }, "human");
+  routeFromDrop(workItemId, resourceId, 1);
+}
+
+/**
+ * The panel shows the first sentence of a command error; the full text stays
+ * in the step result and in `lastResult` for whoever is debugging.
+ */
+function errorHeadline(error: string): string {
+  const first = error.split(". ")[0].trim();
+  return first.endsWith(".") ? first : `${first}.`;
 }
 
 function ChangeCard({
   card,
   index,
+  edited,
   onRoute,
 }: {
   card: PlanCard;
   index: number;
+  edited: boolean;
   onRoute: (workItemId: string, resourceId: string | null) => void;
 }) {
   const scenario = useActiveScenario();
@@ -72,8 +88,11 @@ function ChangeCard({
             )}
             <span className="text-[12px] leading-tight font-medium text-ink">{card.title}</span>
           </div>
-          <span className="shrink-0 border border-rule-2 bg-sheet px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-ink-2">
-            {card.timeLabel}
+          <span className="flex shrink-0 items-center gap-1">
+            {edited && <span className="hmi-label !text-[9px] !text-ink">your change</span>}
+            <span className="border border-rule-2 bg-sheet px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-ink-2">
+              {card.timeLabel}
+            </span>
           </span>
         </div>
         <p className="mt-1 text-[11px] leading-snug text-ink-2">{card.detail}</p>
@@ -109,17 +128,28 @@ function ChangeCard({
 }
 
 export function ProposalCard({ onRoute, onApply, onLater }: ProposalCardProps = {}) {
-  const plan = useProposedPlan();
+  // The draft, not the exploration's winner: the human may already have
+  // retargeted a card, and Apply must run exactly what is on screen.
+  const plan = useDraftPlan();
+  const humanEdited = useHumanEdited();
   const scenario = useActiveScenario();
   const best = useExploration().best;
   const [collapsed, setCollapsed] = useState(false);
+  // Read from the slice, so a keyboard-driven apply surfaces its error too.
+  const failure = useApplyError();
   const route = onRoute ?? defaultRoute;
 
   if (!plan) return null;
   const cards = planCards(plan, scenario);
+  const edits = humanEdited.length;
   const headline = best
-    ? `${best.promisesMet} / ${best.promisedTotal} in ${Math.round(best.promisesMetRate * 100)} % of runs`
+    ? `${best.promisesMet} / ${best.promisedTotal} promises`
     : "not scored yet";
+
+  function apply() {
+    if (onApply) onApply();
+    else applyAndNotify(plan ?? undefined);
+  }
 
   if (collapsed) {
     return (
@@ -134,17 +164,41 @@ export function ProposalCard({ onRoute, onApply, onLater }: ProposalCardProps = 
   }
 
   return (
-    <StoryPanel title="Proposed plan" tone="agent" meta={headline} label="Proposed plan">
+    <StoryPanel
+      title="Proposed plan"
+      tone="agent"
+      meta={headline}
+      label="Proposed plan"
+      footer={
+        edits === 0
+          ? "Draft · nothing is applied until you press apply"
+          : `Draft · ${edits} change${edits === 1 ? "" : "s"} of yours`
+      }
+    >
       <ul className="flex flex-col gap-2 px-3 py-3">
         {cards.map((card, index) => (
-          <ChangeCard key={card.id} card={card} index={index} onRoute={route} />
+          <ChangeCard
+            key={card.id}
+            card={card}
+            index={index}
+            edited={card.workItemId !== null && humanEdited.includes(card.workItemId)}
+            onRoute={route}
+          />
         ))}
       </ul>
+      {failure && (
+        <p
+          role="alert"
+          className="mx-3 mb-2 border-l-2 border-alarm bg-alarm-wash px-2 py-1.5 text-[11px] leading-snug text-ink"
+        >
+          {errorHeadline(failure)}
+        </p>
+      )}
       <div className="flex gap-2 border-t border-rule px-3 py-2.5">
         <button
           type="button"
           className="hmi-button hmi-button--primary flex-1 !text-[11px]"
-          onClick={() => (onApply ? onApply() : applyAndNotify(plan))}
+          onClick={apply}
         >
           Apply &amp; notify team
         </button>
@@ -153,8 +207,7 @@ export function ProposalCard({ onRoute, onApply, onLater }: ProposalCardProps = 
           className="hmi-button !text-[11px]"
           onClick={() => (onLater ? onLater() : setCollapsed(true))}
         >
-          Later
-        </button>
+          Later        </button>
       </div>
     </StoryPanel>
   );

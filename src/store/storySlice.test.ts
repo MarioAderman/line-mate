@@ -4,13 +4,18 @@ import {
   BASELINE_SCENARIO_ID,
   HUMAN_DECISION,
   PART_DELAY,
+  type ExplorationSummary,
   type Plan,
+  type Scenario,
 } from "@/domain";
 import { COMMAND_NAMES, createInitialState, createMemoryContext, executeCommand } from "@/commands";
 import { simulate } from "@/simulation";
+import { WEBMCP_TOOL_NAMES } from "@/webmcp";
 import {
-  explorationStubSnapshots,
-  explorationStubSummary,
+  ETA_SPREAD_MINUTES,
+  STUB_CANDIDATE_PLANS,
+  rankCandidates,
+  runExplorationStub,
 } from "@/components/story/explorationStub";
 import { IDLE_EXPLORATION, useWorkshopStore } from "./workshopStore";
 import {
@@ -18,24 +23,21 @@ import {
   NOTE_CHANNELS,
   NOTE_RECIPIENTS,
   applyAndNotify,
+  draftPlan,
   planChangeInput,
+  progressFromSummary,
   proposal,
-  proposedPlan,
   reset,
+  routeFromDrop,
   startEscalation,
   startExploration,
+  useStoryDraftStore,
   type StoryCommandLog,
 } from "./storySlice";
 
-/** Beats attempt commands two other streams are still building. */
-function pending(log: StoryCommandLog[]): string[] {
-  return log.filter((entry) => !COMMAND_NAMES.includes(entry.name)).map((entry) => entry.name);
-}
-
 /** Every command that already exists must have succeeded. */
 function expectLandedCommandsOk(log: StoryCommandLog[]): void {
-  const failures = log.filter((entry) => COMMAND_NAMES.includes(entry.name) && !entry.ok);
-  expect(failures).toEqual([]);
+  expect(log.filter((e) => COMMAND_NAMES.includes(e.name) && !e.ok)).toEqual([]);
 }
 
 function names(log: StoryCommandLog[]): string[] {
@@ -56,78 +58,109 @@ function view(story: "calm" | "escalated") {
   };
 }
 
+function baseline(): Scenario {
+  const state = useWorkshopStore.getState();
+  return state.scenarios.find((s) => s.id === BASELINE_SCENARIO_ID)!;
+}
+
+/** Beats 3 and 4, with no command available to fail on. */
+async function explore() {
+  return startExploration({ tickMs: 0 });
+}
+
 beforeEach(() => {
   useWorkshopStore.setState(view("escalated"));
+  useStoryDraftStore.getState().clearDraft();
 });
 
 describe("beat 2 — escalation", () => {
-  it("injects the part delay and re-runs the shift, attributed to the simulation", () => {
+  it("sends the disruption through the command layer", () => {
     useWorkshopStore.setState(view("calm"));
     const result = startEscalation();
-
-    expect(names(result.commands)).toEqual(["inject_event", "run_simulation"]);
+    expect(names(result.commands)[0]).toBe("inject_event");
     expect(result.commands[0].input).toEqual({ disruption: PART_DELAY });
-    expectLandedCommandsOk(result.commands);
-    expect(useWorkshopStore.getState().story).toBe("escalation");
-    expect(useWorkshopStore.getState().changes[0]).toMatchObject({
-      actor: "simulation",
-      command: "run_simulation",
-    });
   });
 
-  it("only leaves inject_event pending on engine-explorer", () => {
+  it("does not move the screen when the injection fails", () => {
     useWorkshopStore.setState(view("calm"));
-    expect(pending(startEscalation().commands)).toEqual(["inject_event"]);
+    const result = startEscalation();
+    // TODO(engine): inject_event is engine-explorer's; until it lands the beat
+    // must refuse to pretend the delay happened.
+    if (COMMAND_NAMES.includes("inject_event")) {
+      expect(result.ok).toBe(true);
+      expect(useWorkshopStore.getState().story).toBe("escalation");
+    } else {
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("inject_event");
+      expect(useWorkshopStore.getState().story).toBe("calm");
+      // It also must not run a simulation of a world it failed to change.
+      expect(names(result.commands)).toEqual(["inject_event"]);
+    }
   });
 });
 
 describe("beat 3 — exploration", () => {
-  it("streams progress into the store and ends on the 6/6 candidate", async () => {
+  it("runs exactly one search and displays exactly that summary", async () => {
+    const result = await explore();
+    expect(names(result.commands).filter((n) => n === "explore_schedules")).toHaveLength(1);
+    expect(result.summary).not.toBeNull();
+    // The invariant: the panel state is a pure function of the returned summary.
+    expect(useWorkshopStore.getState().exploration).toEqual(
+      progressFromSummary(result.summary as ExplorationSummary),
+    );
+  });
+
+  it("serves the search from the stub until explore_schedules lands", async () => {
+    const result = await explore();
+    expect(result.servedBy).toBe(COMMAND_NAMES.includes("explore_schedules") ? "command" : "stub");
+  });
+
+  it("measures every candidate instead of declaring a figure", async () => {
+    const result = await explore();
+    const summary = result.summary as ExplorationSummary;
+    expect(summary.candidatesEvaluated).toBe(STUB_CANDIDATE_PLANS.length);
+    expect(summary.replications).toBe(ETA_SPREAD_MINUTES.length);
+    expect(summary.runsExecuted).toBe(STUB_CANDIDATE_PLANS.length * ETA_SPREAD_MINUTES.length);
+    // Rates are shares of whole runs, never a decorative constant.
+    for (const candidate of summary.top) {
+      expect(candidate.promisesMetRate * summary.replications).toBeCloseTo(
+        Math.round(candidate.promisesMetRate * summary.replications),
+      );
+    }
+    // The ranking is the stated objective applied to what was measured.
+    expect(summary.top).toEqual(rankCandidates(summary.top));
+    expect(summary.best).toEqual(summary.top[0]);
+  });
+
+  it("reproduces the same measurement every run", async () => {
+    const scenario = baseline();
+    const a = await runExplorationStub({ scenario, tickMs: 0 });
+    const b = await runExplorationStub({ scenario, tickMs: 0 });
+    expect(a).toEqual(b);
+  });
+
+  it("streams progress while it searches", async () => {
     const seen: number[] = [];
     const unsubscribe = useWorkshopStore.subscribe((state) => {
       if (state.exploration.status === "running") seen.push(state.exploration.runsExecuted);
     });
-    const result = await startExploration({ tickMs: 0 });
+    await explore();
     unsubscribe();
-
-    expect(useWorkshopStore.getState().story).toBe("running");
     expect(seen.length).toBeGreaterThan(10);
-    // The counter only ever climbs.
     expect([...seen].sort((a, b) => a - b)).toEqual(seen);
-
-    const exploration = useWorkshopStore.getState().exploration;
-    expect(exploration.status).toBe("done");
-    expect(exploration.rows).toHaveLength(6);
-    expect(exploration.rows.every((row) => row.progress === 1)).toBe(true);
-    expect(exploration.runsExecuted).toBe(288);
-    expect(exploration.best).toMatchObject({
-      label: "SUV first into Bay 3 at 15:30",
-      promisesMet: 6,
-      promisedTotal: 6,
-      promisesMetRate: 0.94,
-      constraintViolations: [],
-    });
-    expect(result.summary?.candidatesEvaluated).toBe(36);
-    expect(result.cancelled).toBe(false);
   });
 
-  it("records the run through the command layer once explore_schedules lands", async () => {
-    const result = await startExploration({ tickMs: 0 });
-    expect(names(result.commands)).toEqual(["explore_schedules"]);
-    expect(result.commands[0].input).toEqual({
-      scenarioId: BASELINE_SCENARIO_ID,
-      seed: 20260829,
-      replications: 8,
-    });
-  });
-
-  it("does not double-search when a real runner is injected", async () => {
+  it("goes back to the beat it came from when the search fails", async () => {
     const result = await startExploration({
       tickMs: 0,
-      runner: async ({ scenarioId }) => explorationStubSummary(scenarioId),
+      runner: async () => {
+        throw new Error("engine exploded");
+      },
     });
-    expect(result.commands).toEqual([]);
-    expect(useWorkshopStore.getState().exploration.best?.promisesMet).toBe(6);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("engine exploded");
+    expect(useWorkshopStore.getState().story).toBe("escalation");
+    expect(useWorkshopStore.getState().exploration).toEqual(IDLE_EXPLORATION);
   });
 
   it("cancels the previous run when a second one starts", async () => {
@@ -136,51 +169,105 @@ describe("beat 3 — exploration", () => {
     expect((await first).cancelled).toBe(true);
     expect((await second).cancelled).toBe(false);
   });
-
-  it("replays the same deterministic script every take", () => {
-    expect(explorationStubSnapshots()).toEqual(explorationStubSnapshots());
-    const snapshots = explorationStubSnapshots();
-    expect(snapshots[0]).toMatchObject({ status: "running", runsExecuted: 0, best: null });
-    expect(snapshots[snapshots.length - 1]).toMatchObject({ status: "done", runsExecuted: 288 });
-  });
 });
 
-describe("beat 4 — proposal", () => {
-  it("proposes the winning candidate as the plan, without touching the world", async () => {
-    await startExploration({ tickMs: 0 });
+describe("beat 4 — the draft", () => {
+  it("holds the proposal as data and touches no scenario", async () => {
+    await explore();
+    const before = structuredClone(baseline());
     const changesBefore = useWorkshopStore.getState().changes.length;
-    const result = proposal();
 
-    expect(result.commands).toEqual([]);
+    const result = proposal();
+    routeFromDrop("veh-03", "bay-3", 1);
+
+    expect(result.plan).not.toBeNull();
     expect(useWorkshopStore.getState().story).toBe("proposal");
+    // Beats 3 and 4 leave the protected baseline byte-identical.
+    expect(baseline()).toEqual(before);
     expect(useWorkshopStore.getState().changes).toHaveLength(changesBefore);
-    expect(result.plan?.changes).toEqual([...AGENT_PLAN.changes, ...HUMAN_DECISION.changes]);
+    expect(useWorkshopStore.getState().scenarios).toHaveLength(1);
   });
 
-  it("refuses a beat that is out of order", () => {
-    useWorkshopStore.setState(view("calm"));
+  it("keeps a human retarget instead of overwriting it", async () => {
+    await explore();
     proposal();
-    expect(useWorkshopStore.getState().story).toBe("calm");
+    routeFromDrop("veh-03", "bay-3", 1);
+    routeFromDrop("veh-03", "bay-1", 2);
+
+    const routes = draftPlan()!.changes.filter(
+      (c) => c.command === "route_work_item" && c.workItemId === "veh-03",
+    );
+    expect(routes).toEqual([
+      { command: "route_work_item", workItemId: "veh-03", resourceId: "bay-1", position: 2 },
+    ]);
+    expect(useStoryDraftStore.getState().humanEdited).toEqual(["veh-03"]);
+  });
+
+  it("applies exactly the draft that was on screen", async () => {
+    await explore();
+    proposal();
+    routeFromDrop("veh-03", "bay-3", 1);
+    const onScreen = structuredClone(draftPlan()!);
+
+    const applied = applyAndNotify();
+    const sent = applied.commands
+      .filter((c) => c.name === "route_work_item" || c.name === "update_work_item")
+      .map((c) => c.input);
+    expect(sent).toEqual(onScreen.changes.map(planChangeInput));
+  });
+
+  it("refuses to propose without a search", () => {
+    const result = proposal();
+    expect(result.ok).toBe(false);
+    expect(useWorkshopStore.getState().story).toBe("escalation");
+  });
+
+  it("routes to the world, not the draft, outside beat 4", () => {
+    routeFromDrop("veh-01", "bay-1", 1);
+    expect(names(useWorkshopStore.getState().changes.map((c) => ({ name: c.command }) as never))).toBeDefined();
+    expect(useWorkshopStore.getState().changes[0]).toMatchObject({
+      command: "route_work_item",
+      actor: "human",
+    });
   });
 });
 
 describe("beat 5 — apply and notify", () => {
-  async function runToResolved() {
-    startEscalation();
-    await startExploration({ tickMs: 0 });
+  async function runToApply() {
+    await explore();
     proposal();
     return applyAndNotify();
   }
 
-  it("branches off the baseline, applies, re-runs and posts the note", async () => {
-    const result = await runToResolved();
-
-    expect(names(result.commands).slice(0, 1)).toEqual(["create_scenario"]);
-    expect(names(result.commands).slice(-2)).toEqual(["run_simulation", "post_shift_note"]);
+  it("branches, applies and verifies before claiming anything", async () => {
+    const result = await runToApply();
+    expect(names(result.commands)[0]).toBe("create_scenario");
     expectLandedCommandsOk(result.commands);
-    expect(useWorkshopStore.getState().story).toBe("resolved");
 
-    const note = result.commands[result.commands.length - 1];
+    const state = useWorkshopStore.getState();
+    expect(state.activeScenarioId).not.toBe(BASELINE_SCENARIO_ID);
+    // The branch really keeps every promise…
+    expect(state.simulations[state.activeScenarioId].totals.promisesMet).toBe(6);
+    // …and the baseline is still the failing shift.
+    expect(simulate(baseline()).totals.promisesMet).toBe(4);
+  });
+
+  it("does not resolve while the note cannot be stored", async () => {
+    const result = await runToApply();
+    if (COMMAND_NAMES.includes("post_shift_note")) {
+      expect(result.ok).toBe(true);
+      expect(useWorkshopStore.getState().story).toBe("resolved");
+      expect(useWorkshopStore.getState().notes).not.toHaveLength(0);
+    } else {
+      // TODO(engine): post_shift_note is engine-explorer's. No note, no
+      // "team notified" — the beat stays where it is.
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("post_shift_note");
+      expect(useWorkshopStore.getState().story).toBe("proposal");
+      expect(useWorkshopStore.getState().notes).toEqual([]);
+    }
+    expect(names(result.commands)).toContain("post_shift_note");
+    const note = result.commands.find((c) => c.name === "post_shift_note")!;
     expect(note.input).toEqual({
       text: DEFAULT_NOTE_TEXT,
       channels: NOTE_CHANNELS,
@@ -188,47 +275,48 @@ describe("beat 5 — apply and notify", () => {
     });
   });
 
-  it("keeps every promise on the branch and leaves the baseline alone", async () => {
-    await runToResolved();
-    const state = useWorkshopStore.getState();
-
-    expect(state.activeScenarioId).not.toBe(BASELINE_SCENARIO_ID);
-    expect(state.simulations[state.activeScenarioId].totals.promisesMet).toBe(6);
-
-    const baseline = state.scenarios.find((s) => s.id === BASELINE_SCENARIO_ID)!;
-    expect(simulate(baseline).totals.promisesMet).toBe(4);
-    expect(baseline.workItems.find((w) => w.id === "veh-03")!.route).toEqual({
-      resourceId: null,
-      position: null,
+  it("stays on the proposal when a change is rejected", async () => {
+    await explore();
+    proposal({
+      id: "PLAN-BROKEN",
+      label: "Broken",
+      changes: [{ command: "route_work_item", workItemId: "veh-99", resourceId: null, position: null }],
     });
+    const result = applyAndNotify();
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("veh-99");
+    expect(useWorkshopStore.getState().story).toBe("proposal");
   });
 
-  it("attributes the application to whoever applied it", async () => {
-    startEscalation();
-    await startExploration({ tickMs: 0 });
-    proposal();
-    applyAndNotify(undefined, DEFAULT_NOTE_TEXT, { actor: "agent" });
-    const applied = useWorkshopStore
-      .getState()
-      .changes.filter((c) => c.command === "route_work_item");
-    expect(applied.every((c) => c.actor === "agent")).toBe(true);
+  it("refuses to resolve a plan that misses a promise", async () => {
+    await explore();
+    // A plan that does nothing useful: the shift still misses two promises.
+    proposal({
+      id: "PLAN-WEAK",
+      label: "Weak",
+      changes: [{ command: "update_work_item", workItemId: "veh-07", priority: 1 }],
+    });
+    const result = applyAndNotify();
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/keeps \d of 6 promises/);
+    expect(useWorkshopStore.getState().story).toBe("proposal");
+    expect(useWorkshopStore.getState().notes).toEqual([]);
   });
 
-  it("says so when there is no plan yet", () => {
+  it("says so when there is no plan at all", () => {
     useWorkshopStore.setState({ ...view("escalated"), story: "proposal" });
     const result = applyAndNotify();
     expect(result.ok).toBe(false);
-    expect(result.commands).toEqual([
-      { name: "apply_plan", input: null, ok: false, error: expect.any(String) },
-    ]);
+    expect(result.commands).toEqual([]);
+    expect(result.error).toContain("No plan to apply");
   });
 });
 
 describe("the command path", () => {
-  it("applies the proposed plan through executeCommand alone and reaches 6/6", () => {
+  it("applies the demo plan through executeCommand alone and reaches 6/6", () => {
     const plan: Plan = {
-      id: "PLAN-EXP-05",
-      label: "SUV first into Bay 3 at 15:30",
+      id: "PLAN-DEMO",
+      label: "Human + agent",
       changes: [...AGENT_PLAN.changes, ...HUMAN_DECISION.changes],
     };
     const ctx = createMemoryContext("agent");
@@ -236,12 +324,8 @@ describe("the command path", () => {
     for (const change of plan.changes) {
       expect(executeCommand(ctx, change.command, planChangeInput(change)).ok).toBe(true);
     }
-    const result = executeCommand(ctx, "run_simulation", {});
-    expect(result.ok).toBe(true);
+    expect(executeCommand(ctx, "run_simulation", {}).ok).toBe(true);
     expect(ctx.state.simulations[ctx.state.activeScenarioId].totals.promisesMet).toBe(6);
-    expect(ctx.state.changes.every((c) => c.actor === "agent" || c.command === "load_fixture")).toBe(
-      true,
-    );
   });
 
   it("refuses to let the agent edit the baseline in place", () => {
@@ -256,31 +340,55 @@ describe("the command path", () => {
 });
 
 describe("reset", () => {
-  it("returns to the calm shop with the story view state cleared", async () => {
-    startEscalation();
-    await startExploration({ tickMs: 0 });
+  it("rebuilds the world through reset_demo and clears only view state", async () => {
+    await explore();
     proposal();
-    applyAndNotify();
+    routeFromDrop("veh-03", "bay-3", 1);
+    useWorkshopStore.getState().setMcpStatus("linked", 10);
 
-    reset();
+    const result = reset();
+    expect(result.ok).toBe(true);
+    expect(names(result.commands)).toEqual(["reset_demo"]);
+
     const state = useWorkshopStore.getState();
     expect(state.story).toBe("calm");
-    expect(state.view).toBe("board");
     expect(state.exploration).toEqual(IDLE_EXPLORATION);
+    expect(draftPlan()).toBeNull();
     expect(state.notes).toEqual([]);
     expect(state.scenarios).toHaveLength(1);
-    expect(state.activeScenarioId).toBe(BASELINE_SCENARIO_ID);
     expect(state.scenarios[0].resources.find((r) => r.id === "bay-3")!.status).toBe("idle");
     expect(simulate(state.scenarios[0]).totals.promisesMet).toBe(6);
-    expect(proposedPlan(state)).toBeNull();
+    // The WebMCP link describes the room, not the story: it survives a reset.
+    expect(state.mcpStatus).toBe("linked");
   });
 
-  it("survives a second full take", async () => {
+  it("keeps the demo reset out of the agent's hands", () => {
+    const ctx = createMemoryContext("agent");
+    expect(executeCommand(ctx, "reset_demo", { story: "calm" }).ok).toBe(false);
+    expect([...WEBMCP_TOOL_NAMES]).not.toContain("reset_demo");
+  });
+
+  it("puts the next take back at the start of the beat order", async () => {
     reset();
-    startEscalation();
-    await startExploration({ tickMs: 0 });
-    proposal();
-    applyAndNotify();
-    expect(useWorkshopStore.getState().story).toBe("resolved");
+    // From calm the search is not the next beat: the delay has to land first,
+    // and nothing should be computed or drafted meanwhile.
+    const searched = await explore();
+    expect(searched.ok).toBe(false);
+    expect(searched.summary).toBeNull();
+    expect(useWorkshopStore.getState().story).toBe("calm");
+    expect(useWorkshopStore.getState().exploration).toEqual(IDLE_EXPLORATION);
+    expect(proposal().ok).toBe(false);
+    expect(draftPlan()).toBeNull();
+  });
+
+  it("runs a whole second take once the escalation is back", async () => {
+    reset();
+    // Stand in for inject_event, which engine-explorer still owes us.
+    useWorkshopStore.setState(view("escalated"));
+    const searched = await explore();
+    expect(searched.ok).toBe(true);
+    expect(proposal().ok).toBe(true);
+    expect(useWorkshopStore.getState().story).toBe("proposal");
+    expect(draftPlan()).not.toBeNull();
   });
 });

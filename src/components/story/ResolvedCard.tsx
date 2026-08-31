@@ -8,25 +8,10 @@
  * Slack, email and SMS are rendered state, exactly as the scope says.
  */
 import { motion, useReducedMotion } from "motion/react";
-import type { ShiftNote } from "@/domain";
 import { useActiveScenario, useActiveSimulation } from "@/store";
-import { DEFAULT_NOTE_TEXT, NOTE_CHANNELS, NOTE_RECIPIENTS, useLatestNote, useProposedPlan } from "@/store/storySlice";
+import { useDraftPlan, useLatestNote } from "@/store/storySlice";
 import { noteChips, textedCustomerIds } from "./planCards";
 import { StoryPanel } from "./StoryPanel";
-
-/**
- * TODO(engine): drops out once `post_shift_note` exists — until then the panel
- * shows the note the beat tried to post rather than an empty card.
- */
-const PENDING_NOTE: ShiftNote = {
-  id: "NOTE-PENDING",
-  at: 0,
-  author: "human",
-  scenarioId: "",
-  text: DEFAULT_NOTE_TEXT,
-  channels: NOTE_CHANNELS,
-  recipients: NOTE_RECIPIENTS,
-};
 
 function CheckMark() {
   return (
@@ -44,15 +29,17 @@ function CheckMark() {
 
 export function ResolvedCard() {
   const reduced = useReducedMotion();
-  const note = useLatestNote() ?? PENDING_NOTE;
-  const plan = useProposedPlan();
+  // Only a note that was really stored may be shown: the chips are a claim
+  // about the world, not decoration.
+  const note = useLatestNote();
+  const plan = useDraftPlan();
   const scenario = useActiveScenario();
   const simulation = useActiveSimulation();
   const promisesMet = simulation?.totals.promisesMet ?? 0;
   const promisedTotal =
     simulation?.totals.promisedTotal ?? scenario.workItems.filter((w) => w.dueMinute !== null).length;
   const customers = plan ? textedCustomerIds(plan, scenario).length : 0;
-  const chips = noteChips(note, customers);
+  const chips = note ? noteChips(note, customers) : [];
   const overtime = scenario.constraints.overtimeAllowed ? "overtime allowed" : "no overtime";
 
   return (
@@ -65,6 +52,11 @@ export function ResolvedCard() {
         </p>
       </div>
 
+      {note === null ? (
+        <p className="px-3 py-2.5 text-[11px] leading-snug text-ink-2">
+          The shift note was not stored, so the team has not been notified.
+        </p>
+      ) : (
       <div className="px-3 py-2.5">
         <h3 className="hmi-label">Team notified</h3>
         <ul className="mt-2 flex flex-col gap-1.5">
@@ -85,11 +77,11 @@ export function ResolvedCard() {
             </motion.li>
           ))}
         </ul>
+        <blockquote className="mt-2 border-l-2 border-ink bg-paper-2 px-2.5 py-2 text-[11px] leading-snug text-ink-2">
+          {note.text}
+        </blockquote>
       </div>
-
-      <blockquote className="mx-3 mb-3 border-l-2 border-ink bg-paper-2 px-2.5 py-2 text-[11px] leading-snug text-ink-2">
-        {note.text}
-      </blockquote>
+      )}
     </StoryPanel>
   );
 }
