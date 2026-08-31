@@ -9,8 +9,10 @@
  * the alert card and the title block sit in its bottom band.
  */
 import { useEffect, type ReactNode } from "react";
+import { AnimatePresence } from "motion/react";
 import { VIEWPORTS, useWorkshopStore } from "@/store";
 import { AlertCard } from "./AlertCard";
+import { Cover } from "./Cover";
 import { Header } from "./Header";
 import { LiveStrip } from "./LiveStrip";
 import { Popover } from "./Popover";
@@ -28,6 +30,7 @@ interface Props {
 
 export function Shell({ board, floor }: Props) {
   const view = useWorkshopStore((s) => s.view);
+  const cover = useWorkshopStore((s) => s.cover);
   const viewport = useWorkshopStore((s) => s.viewport);
   const setViewport = useWorkshopStore((s) => s.setViewport);
   const preset = VIEWPORTS[viewport];
@@ -47,15 +50,23 @@ export function Shell({ board, floor }: Props) {
         style={{ width: preset.width, height: preset.height, maxWidth: "100vw", maxHeight: "100vh" }}
         className="flex flex-col overflow-hidden border-x border-rule"
       >
-        <Header />
-        <PromisesStrip />
-        <div data-slot="field" className="relative min-h-0 flex-1">
-          {view === "board" ? board : floor}
-          <AlertCard />
-          <TitleBlock />
-          <StoryLayer />
-        </div>
-        <LiveStrip />
+        <AnimatePresence initial={false}>
+          {cover ? (
+            <Cover key="cover" />
+          ) : (
+            <>
+              <Header />
+              <PromisesStrip />
+              <div data-slot="field" className="relative min-h-0 flex-1">
+                {view === "board" ? board : floor}
+                <AlertCard />
+                <TitleBlock />
+                <StoryLayer />
+              </div>
+              <LiveStrip />
+            </>
+          )}
+        </AnimatePresence>
       </div>
       <Popover />
       <DemoControls />

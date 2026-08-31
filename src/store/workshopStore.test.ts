@@ -18,6 +18,17 @@ beforeEach(() => {
     agentEdited: [],
     draftScenarioId: null,
     applyError: null,
+    cover: true,
+  });
+});
+
+describe("the cover sheet", () => {
+  it("opens on a fresh load, dismisses once, and never returns on reset", () => {
+    expect(useWorkshopStore.getState().cover).toBe(true);
+    useWorkshopStore.getState().dismissCover();
+    expect(useWorkshopStore.getState().cover).toBe(false);
+    expect(useWorkshopStore.getState().run("reset_demo", {}, "human").ok).toBe(true);
+    expect(useWorkshopStore.getState().cover).toBe(false);
   });
 });
 

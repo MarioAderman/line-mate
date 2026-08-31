@@ -87,6 +87,8 @@ export interface WorkshopStore extends WorkshopState {
   draftScenarioId: string | null;
   /** Why the last apply was refused — null when the plan has not been tried. */
   applyError: string | null;
+  /** SHEET 0: the cover shown on a fresh load, dismissed once per visit. */
+  cover: boolean;
 
   run(name: string, input?: unknown, actor?: Actor): CommandResult;
   select(selection: Selection | null): void;
@@ -98,6 +100,7 @@ export interface WorkshopStore extends WorkshopState {
   setExploration(progress: ExplorationProgress): void;
   setPopover(popover: Popover | null): void;
   setViewport(viewport: ViewportPreset): void;
+  dismissCover(): void;
   setDraft(plan: Plan | null): void;
   /** Retargets a job inside the draft. No scenario is touched. */
   routeInDraft(workItemId: string, resourceId: string | null, position?: number | null): void;
@@ -119,6 +122,8 @@ export const RESET_VIEW = {
   agentEdited: [],
   draftScenarioId: null,
   applyError: null,
+  // A demo reset never re-opens the cover: takes restart on the board.
+  cover: false,
 } satisfies Partial<WorkshopStore>;
 
 /** Frames per second-ish pacing when an agent-run search is replayed. */
@@ -145,6 +150,7 @@ export const useWorkshopStore = create<WorkshopStore>((set, get) => ({
   agentEdited: [],
   draftScenarioId: null,
   applyError: null,
+  cover: true,
 
   run: (name, input = {}, actor: Actor = "human") => {
     // While the proposal is on screen, an agent retarget of the active
@@ -248,6 +254,7 @@ export const useWorkshopStore = create<WorkshopStore>((set, get) => ({
       applyError: null,
     }),
   setApplyError: (applyError) => set({ applyError }),
+  dismissCover: () => set({ cover: false }),
   clearDraft: () =>
     set({ draft: null, draftScenarioId: null, humanEdited: [], agentEdited: [], applyError: null }),
   routeInDraft: (workItemId, resourceId, position = 1) =>
