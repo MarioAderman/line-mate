@@ -116,8 +116,8 @@ export const RESET_VIEW = {
 } satisfies Partial<WorkshopStore>;
 
 /** Frames per second-ish pacing when an agent-run search is replayed. */
-/** ~36 trace frames x 420ms ≈ 15s, matching STORY_TICK_MS on the human path. */
-const REPLAY_FRAME_MS = 420;
+/** ~36 trace frames x 280ms ≈ 10s, matching STORY_TICK_MS on the human path. */
+const REPLAY_FRAME_MS = 280;
 let replayToken = 0;
 
 export const useWorkshopStore = create<WorkshopStore>((set, get) => ({

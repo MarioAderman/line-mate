@@ -12,8 +12,8 @@ import type { ExplorationProgress, ExplorationSummary, Scenario } from "@/domain
 export const STORY_SEED = 20260829;
 
 /** Milliseconds between replayed progress frames on the UI path. */
-/** ~36 trace frames x 420ms ≈ 15s: fast, but visibly running (Mario's call). */
-export const STORY_TICK_MS = 420;
+/** ~36 trace frames x 280ms ≈ 10s: fast, but visibly running (Mario's call). */
+export const STORY_TICK_MS = 280;
 
 export interface ExplorationRunOptions {
   /** The live world the search runs against. */
