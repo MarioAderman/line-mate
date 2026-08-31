@@ -28,7 +28,7 @@ export interface WorkshopState {
   changes: Change[];
   /** Disruptions applied so far, keyed by scenario id (demo: the part delay). */
   disruptions: Record<string, Disruption[]>;
-  /** Notes "sent" to the team — rendered state, never delivered anywhere. */
+  /** Newest first. Notes "sent" to the team — rendered state, never delivered anywhere. */
   notes: ShiftNote[];
   /** Monotonic counter used to mint ids without a clock or randomness. */
   sequence: number;
