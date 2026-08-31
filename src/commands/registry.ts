@@ -994,7 +994,8 @@ const postShiftNote: CommandDefinition = {
         channels,
         recipients: input.recipients ?? [],
       });
-      const result = withChange({ ...s, notes: [...s.notes, note] }, ctx, {
+      // Newest first, like `changes`: the resolved card reads notes[0].
+      const result = withChange({ ...s, notes: [note, ...s.notes] }, ctx, {
         command: "post_shift_note",
         scenarioId: scenario.id,
         summary,

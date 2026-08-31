@@ -47,6 +47,22 @@ export const TOP_CANDIDATES = 8;
 export const DEFAULT_CHUNK_SIZE = 4;
 /** Rows a progress emission carries — a sliding window, not the whole list. */
 export const PROGRESS_ROWS = 8;
+/** Queued candidates shown ahead of the frontier, so rows fill rather than pop. */
+export const QUEUED_GLIMPSE = 3;
+
+/**
+ * Ceilings on `replications`. These are guard rails against a typo, not the
+ * product's limit: `simulateReplicated` is a pure diagnostic and is expected
+ * to be pushed to hundreds or thousands of worlds when someone is checking
+ * whether a plan really holds, while an exploration multiplies its count by
+ * every candidate and so stays far lower. The agent-facing `explore_schedules`
+ * input is bounded much tighter still (64) in the command registry.
+ *
+ * Both are reported back as `replications` on the result, so a clamp can never
+ * silently turn "I ran 400 worlds" into a smaller number nobody notices.
+ */
+export const MAX_REPLICATIONS = 10_000;
+export const MAX_EXPLORE_REPLICATIONS = 200;
 
 /**
  * Operational tolerances the jitter stays inside.
@@ -211,7 +227,7 @@ export function simulateReplicated(
   options: ReplicationOptions = {},
 ): ReplicatedResult {
   const seed = clampInt(options.seed, DEFAULT_SEED, 0, 0xffffffff);
-  const replications = clampInt(options.replications, DEFAULT_REPLICATIONS, 1, 200);
+  const replications = clampInt(options.replications, DEFAULT_REPLICATIONS, 1, MAX_REPLICATIONS);
   const runs = buildWorlds(scenario, seed, replications).map(simulate);
   return aggregate(scenario, seed, runs);
 }
@@ -474,7 +490,12 @@ export function* exploreSchedulesSteps(
   options: ExploreOptions = {},
 ): Generator<ExplorationProgress, ExplorationSummary, void> {
   const seed = clampInt(options.seed, DEFAULT_SEED, 0, 0xffffffff);
-  const replications = clampInt(options.replications, DEFAULT_REPLICATIONS, 1, 200);
+  const replications = clampInt(
+    options.replications,
+    DEFAULT_REPLICATIONS,
+    1,
+    MAX_EXPLORE_REPLICATIONS,
+  );
   const maxCandidates = clampInt(options.maxCandidates, DEFAULT_MAX_CANDIDATES, 1, 2000);
   const chunkSize = clampInt(options.chunkSize, DEFAULT_CHUNK_SIZE, 1, 64);
 
@@ -486,10 +507,17 @@ export function* exploreSchedulesSteps(
   const byIndex = new Map<number, ExplorationCandidate>();
   let best: ExplorationCandidate | null = null;
 
+  /**
+   * The visible rows: the candidates just finished, plus a glimpse of what is
+   * queued behind them. Anchored on the frontier rather than on the chunk
+   * size, so a large chunk still fills the panel instead of running off the
+   * end of the list and emitting nothing.
+   */
   const rowsUpTo = (upTo: number): ExplorationRow[] => {
-    const start = Math.max(0, upTo - (PROGRESS_ROWS - chunkSize));
+    const end = Math.min(specs.length, upTo + QUEUED_GLIMPSE);
+    const start = Math.max(0, end - PROGRESS_ROWS);
     return specs
-      .slice(start, Math.min(specs.length, start + PROGRESS_ROWS))
+      .slice(start, end)
       .map((spec, offset) => rowFor(spec, byIndex.get(start + offset)));
   };
 

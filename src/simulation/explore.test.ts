@@ -12,6 +12,8 @@ import { jitter, jitterBy, mixSeed, mulberry32 } from "./random";
 import {
   DEFAULT_REPLICATIONS,
   DEFAULT_SEED,
+  MAX_REPLICATIONS,
+  PROGRESS_ROWS,
   PART_ETA_JITTER_MINUTES,
   STEP_DURATION_JITTER,
   TOP_CANDIDATES,
@@ -120,6 +122,16 @@ describe("simulateReplicated", () => {
     const c = simulateReplicated(fixture, { seed: 43, replications: 12 });
     expect(c.meanPromisesMet).not.toBe(Number.NaN);
     expect(JSON.stringify(c)).not.toBe(JSON.stringify(a));
+  });
+
+  it("runs the number of worlds it was asked for, and says how many it ran", () => {
+    for (const replications of [1, 37, 400]) {
+      const result = simulateReplicated(fixture, { replications });
+      expect(result.replications).toBe(replications);
+    }
+    // Above the guard rail it clamps, but never silently: the result says so.
+    const clamped = simulateReplicated(fixture, { replications: MAX_REPLICATIONS + 1 });
+    expect(clamped.replications).toBe(MAX_REPLICATIONS);
   });
 
   it("reports the nominal run alongside the spread", () => {
@@ -256,8 +268,12 @@ describe("exploreSchedules", () => {
     const held = simulateReplicated(applyPlanChanges(fixture, best.changes), {
       replications: 400,
     });
+    // The count that was asked for is the count that ran — a clamp here would
+    // quietly shrink the evidence behind every robustness claim we make.
+    expect(held.replications).toBe(400);
+    expect(held.nominal.totals.promisesMet).toBe(6);
     expect(held.promisesMetRate).toBeGreaterThan(0.85);
-    expect(held.worstPromisesMet).toBeGreaterThanOrEqual(5);
+    expect(held.worstPromisesMet).toBe(6);
   });
 
   it("ranks deterministically, ties broken by id", () => {
@@ -341,6 +357,24 @@ describe("progress", () => {
     expect(statuses[statuses.length - 1]).toBe("done");
     expect(statuses.slice(0, -1).every((s) => s === "running")).toBe(true);
     expect(last!.best!.promisesMet).toBe(6);
+  });
+
+  it("fills the panel even when a chunk is larger than the row window", () => {
+    for (const chunkSize of [1, 4, PROGRESS_ROWS, PROGRESS_ROWS * 2, 40]) {
+      let emissions = 0;
+      exploreSchedulesChunked(fixture, {
+        replications: 2,
+        chunkSize,
+        onProgress: (progress) => {
+          emissions += 1;
+          expect(progress.rows.length).toBeGreaterThan(0);
+          expect(progress.rows.length).toBeLessThanOrEqual(PROGRESS_ROWS);
+          // Rows are a contiguous slice of the search, newest work last.
+          expect(new Set(progress.rows.map((r) => r.id)).size).toBe(progress.rows.length);
+        },
+      });
+      expect(emissions).toBeGreaterThan(0);
+    }
   });
 
   it("reports a best-so-far from the first chunk onwards", () => {

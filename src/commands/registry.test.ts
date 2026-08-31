@@ -543,6 +543,18 @@ describe("post_shift_note", () => {
     expect(data.note.scenarioId).toBe(BASELINE_SCENARIO_ID);
   });
 
+  it("keeps notes newest first, the way the resolved card reads them", () => {
+    const ctx = createMemoryContext("human");
+    ok(executeCommand(ctx, "post_shift_note", { text: "First note.", channels: ["slack"] }));
+    const second = ok<{ note: ShiftNote }>(
+      executeCommand(ctx, "post_shift_note", { text: "Second note.", channels: ["slack"] }),
+    );
+    expect(ctx.state.notes).toHaveLength(2);
+    expect(ctx.state.notes[0]).toEqual(second.note);
+    expect(ctx.state.notes[0].text).toBe("Second note.");
+    expect(ctx.state.notes[1].text).toBe("First note.");
+  });
+
   it("is simulated: nothing is delivered anywhere", () => {
     const ctx = createMemoryContext("human");
     const data = ok<{ delivered: boolean; simulated: boolean; summary: string }>(
