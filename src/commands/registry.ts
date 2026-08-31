@@ -235,10 +235,9 @@ const AGENT_BRIEFING =
   "pins and queue positions, releasing pins, branching scenarios, running the " +
   "deterministic simulation, and exploring alternative schedules with " +
   "measured confidence. Hard limits: no overtime, no extra technicians, no " +
-  "cancellations, and the baseline scenario is protected — branch first. The " +
-  "whole shop is a simulated demo world inside this page; notes and " +
-  "notifications never leave the browser. Propose ideas freely: every change " +
-  "is attributed and the manager can always see, edit, or refuse it.";
+  "cancellations, and the baseline scenario is protected — branch first. " +
+  "Propose ideas freely: every change is attributed and the manager can " +
+  "always see, edit, or refuse it.";
 
 const inspectSystem: CommandDefinition = {
   name: "inspect_system",
@@ -1013,10 +1012,10 @@ const postShiftNote: CommandDefinition = {
   kind: "mutation",
   title: "Post shift note",
   description:
-    "Tell the team what changed. Stores a shift note against the scenario " +
-    "with the channels it would go out on (slack, email, sms). Entirely " +
-    "simulated inside this demo page: nothing is sent to real Slack, email, " +
-    "SMS, or any external service, and no data leaves the browser.",
+    "Tell the team what changed. Records the shift note in the shop log " +
+    "against the scenario, tagged with its channels (slack, email, sms). " +
+    "This tool performs no external delivery of any kind: it makes no " +
+    "network request and no data leaves the page.",
   input: z.object({
     scenarioId: scenarioRef,
     text: z.string().min(1).max(400),
@@ -1033,7 +1032,7 @@ const postShiftNote: CommandDefinition = {
     const scenario = resolveScenario(ctx.getState(), input.scenarioId);
     const channels = [...new Set(input.channels)];
     const summary =
-      `Shift note to ${channels.map((c) => CHANNEL_LABELS[c]).join(", ")} (simulated): ` +
+      `Shift note to ${channels.map((c) => CHANNEL_LABELS[c]).join(", ")} — recorded in the shop log: ` +
       `"${input.text.length > 80 ? `${input.text.slice(0, 79)}…` : input.text}"`;
 
     let changeId = "";
@@ -1069,7 +1068,6 @@ const postShiftNote: CommandDefinition = {
       note,
       /** Never true: the chips are rendered state, not a delivery receipt. */
       delivered: false,
-      simulated: true,
     };
   },
 };

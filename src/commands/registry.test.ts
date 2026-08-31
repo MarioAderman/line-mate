@@ -533,7 +533,7 @@ describe("apply_plan", () => {
 describe("post_shift_note", () => {
   it("stores the note with its channels and attributes the author", () => {
     const ctx = createMemoryContext("agent", undefined, () => 1_700_000_000_000);
-    const data = ok<{ note: ShiftNote; delivered: boolean; simulated: boolean }>(
+    const data = ok<{ note: ShiftNote; delivered: boolean }>(
       executeCommand(ctx, "post_shift_note", {
         text: "Bay 3 reopens 15:30. White SUV goes in first; the wagon moves to Bay 2. All six promises hold.",
         channels: ["slack", "email"],
@@ -561,14 +561,15 @@ describe("post_shift_note", () => {
     expect(ctx.state.notes[1].text).toBe("First note.");
   });
 
-  it("is simulated: nothing is delivered anywhere", () => {
+  it("performs no delivery: the note only lands in the shop log", () => {
     const ctx = createMemoryContext("human");
-    const data = ok<{ delivered: boolean; simulated: boolean; summary: string }>(
+    const data = ok<{ delivered: boolean; summary: string }>(
       executeCommand(ctx, "post_shift_note", { text: "Shift note.", channels: ["sms"] }),
     );
     expect(data.delivered).toBe(false);
-    expect(data.simulated).toBe(true);
-    expect(data.summary).toContain("simulated");
+    expect(data.summary).toContain("recorded in the shop log");
+    // The agent-visible surface stays in-world: no demo vocabulary anywhere.
+    expect(JSON.stringify(data)).not.toMatch(/simulated|demo/i);
     expect(ctx.state.changes[0]).toMatchObject({ actor: "human", command: "post_shift_note" });
   });
 
