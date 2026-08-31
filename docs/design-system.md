@@ -72,6 +72,11 @@ accents, decorative gradients, glass surfaces, and broad dark fills do not belon
 - The header switch reveals a full-bleed diagonal 2.5D SVG floor.
 - It contains the waiting lot, three lifts, diagnostics, exit, and parts van.
 - It renders the same canonical world and story state as the Shift Board.
+- Floor vehicles must read as convincing volumetric isometric cars, not side-view silhouettes
+  extruded into thin upright slabs. Each vehicle needs a footprint and visible top, near, and far
+  body planes, with recognizable hood, roof/cabin, glazing, fascia, wheel arches,
+  perspective-correct wheels, and a contact shadow. Sedan, SUV, wagon, and van proportions must
+  remain distinguishable and align with the floor's axonometric projection.
 - This is 2D SVG, not WebGL or a 3D engine. Do not add Three.js, a full 3D plant, CAD import, or a
   second visual state model.
 
@@ -82,9 +87,11 @@ accents, decorative gradients, glass surfaces, and broad dark fills do not belon
    risk, projected 4/6.
 3. **Running:** visible deterministic scenario exploration with descriptions, progress bars,
    run counter, best-so-far, and confidence/rate.
-4. **Proposal:** evidence-backed plan; draggable cards let the human refine routing or priority.
-5. **Resolved:** applied human + agent plan reaches 6/6; Slack/email/SMS chips are simulated UI
-   state only and make no external calls.
+4. **Proposal:** the measured agent plan already reaches 6/6; draggable cards let the human lock
+   the SUV into Bay 3 position 1 as an authority/predictability decision. Copy must explicitly say
+   the measured outcome remains unchanged at 6/6 and 100%, not claim a numerical improvement.
+5. **Resolved:** the human approves and applies the 6/6 recovery plan and simulated notification;
+   Slack/email/SMS chips are rendered UI state only and make no external calls.
 
 The Board/Floor switch changes presentation, never the story or operational state.
 
@@ -101,8 +108,9 @@ The Board/Floor switch changes presentation, never the story or operational stat
 - Monitor: approximately **1567×995**; record the final video at 1080p.
 - No horizontal scrolling, clipped shared strips, hidden controls, or popovers outside the pane.
 - English copy only for the demo.
-- Side-view vehicle silhouettes must be original or have a documented compatible licence; current
-  glyphs are placeholders until that source is settled.
+- Board/shared-strip side-view silhouettes and Floor isometric vehicle artwork must be original or
+  have a documented compatible licence; current glyphs are placeholders until that source is
+  settled.
 - Keyboard focus, semantic labels, reduced motion, and colour-independent state cues are required.
 
 ## Avoid
