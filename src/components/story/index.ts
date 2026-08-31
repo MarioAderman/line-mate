@@ -1,5 +1,5 @@
 export * from "./dragDrop";
-export * from "./explorationStub";
+export * from "./exploration";
 export * from "./planCards";
 export * from "./DemoControls";
 export * from "./ProposalCard";

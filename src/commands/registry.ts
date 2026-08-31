@@ -26,6 +26,8 @@ import {
   type Actor,
   type Change,
   type Disruption,
+  type ExplorationProgress,
+  type ExplorationSummary,
   type NoteChannel,
   type Plan,
   type PlanChange,
@@ -36,7 +38,7 @@ import {
 import {
   compareScenarios,
   describeExploration,
-  exploreSchedules,
+  exploreSchedulesSteps,
   simulate,
   type SimulationResult,
 } from "@/simulation";
@@ -663,6 +665,11 @@ const routeWorkItem: CommandDefinition = {
     assertMutable(ctx, scenario, input.allowBaselineEdit);
     const item = findWorkItem(scenario, input.workItemId);
     if (!item) throw new CommandError(`Unknown work item "${input.workItemId}".`);
+    if (input.resourceId === null && input.position != null) {
+      throw new CommandError(
+        "A released route has no queue: pass position null when resourceId is null.",
+      );
+    }
     if (input.resourceId !== null) {
       const target = findResource(scenario, input.resourceId);
       if (!target) throw new CommandError(`Unknown resource "${input.resourceId}".`);
@@ -880,6 +887,11 @@ function applyValidatedPlanChange(scenario: Scenario, change: PlanChange): Scena
   if (change.command === "update_work_item") {
     return replace({ ...item, priority: change.priority });
   }
+  if (change.resourceId === null && change.position != null) {
+    throw new CommandError(
+      `${item.vehicle}: a released route has no queue position.`,
+    );
+  }
   if (change.resourceId !== null) {
     const target = findResource(scenario, change.resourceId);
     if (!target) throw new CommandError(`Unknown resource "${change.resourceId}".`);
@@ -1055,15 +1067,36 @@ const exploreSchedulesCommand: CommandDefinition = {
     scenarioId: scenarioRef,
     seed: z.number().int().min(0).max(0xffffffff).optional(),
     replications: z.number().int().min(1).max(64).optional(),
+    /**
+     * Also return the progress frames the ONE search emitted, so a UI can
+     * replay them. Never a second search: the frames and the summary come
+     * from the same run of the iterator.
+     */
+    includeTrace: z.boolean().optional(),
   }),
   run: (ctx, raw) => {
-    const input = raw as { scenarioId?: string; seed?: number; replications?: number };
+    const input = raw as {
+      scenarioId?: string;
+      seed?: number;
+      replications?: number;
+      includeTrace?: boolean;
+    };
     const state = ctx.getState();
     const scenario = resolveScenario(state, input.scenarioId);
-    const summary = exploreSchedules(scenario, {
+    const trace: ExplorationProgress[] = [];
+    const steps = exploreSchedulesSteps(scenario, {
       seed: input.seed,
       replications: input.replications,
     });
+    let summary!: ExplorationSummary;
+    for (;;) {
+      const step = steps.next();
+      if (step.done) {
+        summary = step.value;
+        break;
+      }
+      trace.push(step.value);
+    }
     const headline = describeExploration(summary);
 
     let changeId = "";
@@ -1086,7 +1119,13 @@ const exploreSchedulesCommand: CommandDefinition = {
       return result.state;
     });
 
-    return { changeId, actor: ctx.actor, headline, ...summary };
+    return {
+      changeId,
+      actor: ctx.actor,
+      headline,
+      ...summary,
+      ...(input.includeTrace ? { trace } : {}),
+    };
   },
 };
 

@@ -23,7 +23,6 @@
  * Beats: calm → escalation → running → proposal → resolved.
  */
 import { useMemo } from "react";
-import { create } from "zustand";
 import {
   BASELINE_SCENARIO_ID,
   PART_DELAY,
@@ -36,14 +35,15 @@ import {
   type ShiftNote,
   type StoryState,
 } from "@/domain";
-import { COMMAND_NAMES, type CommandResult } from "@/commands";
+import { type CommandResult } from "@/commands";
 import {
+  ExplorationAborted,
   STORY_SEED,
+  STORY_TICK_MS,
   isExplorationAborted,
-  planFromCandidate,
-  runExplorationStub,
   type ExplorationRunner,
-} from "@/components/story/explorationStub";
+} from "@/components/story/exploration";
+import { planFromCandidate } from "@/simulation";
 import { IDLE_EXPLORATION, useWorkshopStore, type WorkshopStore } from "./workshopStore";
 
 /* ------------------------------------------------------------- story copy */
@@ -79,7 +79,7 @@ export interface StoryStepResult {
   error: string | null;
 }
 
-export type ExplorationSource = "command" | "stub" | "injected";
+export type ExplorationSource = "command" | "injected";
 
 export interface StoryExplorationResult extends StoryStepResult {
   summary: ExplorationSummary | null;
@@ -91,10 +91,6 @@ export interface StoryExplorationResult extends StoryStepResult {
 
 export interface StoryProposalResult extends StoryStepResult {
   plan: Plan | null;
-}
-
-function hasCommand(name: string): boolean {
-  return COMMAND_NAMES.includes(name);
 }
 
 function step(
@@ -145,57 +141,13 @@ function advanceIf(
 
 /* ---------------------------------------------------------- draft proposal */
 
-interface StoryDraft {
-  plan: Plan | null;
-  /** Work items the human retargeted — attribution on the card. */
-  humanEdited: string[];
-  /** Why the last apply did not go through, for whichever surface asks. */
-  lastError: string | null;
-}
-
-interface StoryDraftStore extends StoryDraft {
-  setDraft(plan: Plan | null): void;
-  /** Retargets a job inside the draft. No scenario is touched. */
-  routeInDraft(workItemId: string, resourceId: string | null, position?: number | null): void;
-  setApplyError(error: string | null): void;
-  clearDraft(): void;
-}
-
 /**
- * The unapplied proposal. View state: a plan on screen is not a plan in the
- * world, and until Apply nothing here has touched a scenario.
+ * Finding 1 (I1): the draft lives in the ONE canonical store as view state —
+ * `draft`, `humanEdited`, `applyError` on `WorkshopStore`. These wrappers keep
+ * the beat API in one place; there is no second Zustand store.
  */
-export const useStoryDraftStore = create<StoryDraftStore>((set) => ({
-  plan: null,
-  humanEdited: [],
-  lastError: null,
-  setDraft: (plan) => set({ plan, humanEdited: [], lastError: null }),
-  setApplyError: (lastError) => set({ lastError }),
-  clearDraft: () => set({ plan: null, humanEdited: [], lastError: null }),
-  routeInDraft: (workItemId, resourceId, position = 1) =>
-    set((state) => {
-      if (!state.plan) return state;
-      const change: PlanChange = { command: "route_work_item", workItemId, resourceId, position };
-      const existing = state.plan.changes.findIndex(
-        (c) => c.command === "route_work_item" && c.workItemId === workItemId,
-      );
-      const changes =
-        existing === -1
-          ? [...state.plan.changes, change]
-          : state.plan.changes.map((c, i) => (i === existing ? change : c));
-      return {
-        plan: { ...state.plan, changes },
-        // A fresh edit deserves a fresh attempt.
-        lastError: null,
-        humanEdited: state.humanEdited.includes(workItemId)
-          ? state.humanEdited
-          : [...state.humanEdited, workItemId],
-      };
-    }),
-}));
-
 export function draftPlan(): Plan | null {
-  return useStoryDraftStore.getState().plan;
+  return useWorkshopStore.getState().draft;
 }
 
 /**
@@ -208,12 +160,18 @@ export function routeFromDrop(
   resourceId: string | null,
   position: number | null = 1,
 ): StoryStepResult {
-  if (useWorkshopStore.getState().story === "proposal" && draftPlan() !== null) {
-    useStoryDraftStore.getState().routeInDraft(workItemId, resourceId, position);
+  const store = useWorkshopStore.getState();
+  if (store.story === "proposal" && store.draft !== null) {
+    store.routeInDraft(workItemId, resourceId, position);
     return { ok: true, story: "proposal", commands: [], error: null };
   }
   const log: StoryCommandLog[] = [];
-  step(log, "route_work_item", { workItemId, resourceId, position }, "human");
+  step(
+    log,
+    "route_work_item",
+    { workItemId, resourceId, position: resourceId === null ? null : position },
+    "human",
+  );
   return result(log);
 }
 
@@ -242,20 +200,38 @@ export function startEscalation(options: EscalationOptions = {}): StoryStepResul
 export class ExplorationFailed extends Error {}
 
 /**
- * The one search. When `explore_schedules` exists it is a single attributed
- * command call; until then it is the stub. Either way exactly one search runs
- * per exploration and its summary is what the panel shows.
+ * The one search (finding 3): a single attributed `explore_schedules` call
+ * with `includeTrace`. The command runs the engine iterator ONCE; its trace
+ * frames are replayed here as the visible progress and its summary is what
+ * the panel shows. No second search anywhere.
  */
-const commandRunner: ExplorationRunner = async ({ scenario, seed, replications }) => {
+const commandRunner: ExplorationRunner = async ({
+  scenario,
+  seed,
+  replications,
+  onProgress,
+  signal,
+  tickMs = STORY_TICK_MS,
+}) => {
   const call = useWorkshopStore
     .getState()
-    .run("explore_schedules", { scenarioId: scenario.id, seed, replications }, "agent");
+    .run(
+      "explore_schedules",
+      { scenarioId: scenario.id, seed, replications, includeTrace: true },
+      "agent",
+    );
   if (!call.ok) throw new ExplorationFailed(call.error);
-  return call.data as ExplorationSummary;
+  const data = call.data as ExplorationSummary & { trace?: ExplorationProgress[] };
+  const { trace = [], ...summary } = data;
+  for (const frame of trace) {
+    if (signal?.aborted) throw new ExplorationAborted();
+    if (tickMs > 0) await new Promise((resolve) => setTimeout(resolve, tickMs));
+    onProgress?.(frame);
+  }
+  return summary;
 };
 
-export const defaultExplorationRunner: ExplorationRunner = (options) =>
-  hasCommand("explore_schedules") ? commandRunner(options) : runExplorationStub(options);
+export const defaultExplorationRunner: ExplorationRunner = commandRunner;
 
 export interface ExplorationOptions {
   /** TODO(engine): pass the chunked `exploreSchedules` here at integration. */
@@ -303,11 +279,7 @@ export async function startExploration(
   const store = useWorkshopStore.getState();
   const scenario = store.scenarios.find((s) => s.id === store.activeScenarioId);
   const previousStory = store.story;
-  const servedBy: ExplorationSource = options.runner
-    ? "injected"
-    : hasCommand("explore_schedules")
-      ? "command"
-      : "stub";
+  const servedBy: ExplorationSource = options.runner ? "injected" : "command";
 
   if (!scenario) {
     return { ...result(log, "No active scenario."), summary: null, cancelled: false, servedBy };
@@ -389,7 +361,7 @@ export function proposal(plan?: Plan): StoryProposalResult {
   }
   const advanced = advanceIf([], "proposal");
   if (!advanced.ok) return { ...advanced, plan: null };
-  useStoryDraftStore.getState().setDraft(structuredClone(chosen));
+  useWorkshopStore.getState().setDraft(structuredClone(chosen));
   return { ...advanced, plan: chosen };
 }
 
@@ -426,7 +398,7 @@ export function applyAndNotify(
   options: ApplyOptions = {},
 ): StoryStepResult {
   const outcome = applyAndNotifyInner(plan, noteText, options);
-  useStoryDraftStore.getState().setApplyError(outcome.ok ? null : outcome.error);
+  useWorkshopStore.getState().setApplyError(outcome.ok ? null : outcome.error);
   return outcome;
 }
 
@@ -458,17 +430,7 @@ function applyAndNotifyInner(
     if (firstError(log) !== null) return result(log);
   }
 
-  if (hasCommand("apply_plan")) {
-    step(log, "apply_plan", { plan: chosen, planId: chosen.id }, actor);
-  } else {
-    // TODO(engine): collapses into the single `apply_plan` call above once it
-    // lands. A PlanChange *is* a command call, so this applies the same plan
-    // through the same validated, attributed path.
-    for (const change of chosen.changes) {
-      step(log, change.command, planChangeInput(change), actor);
-      if (firstError(log) !== null) return result(log);
-    }
-  }
+  step(log, "apply_plan", { plan: chosen }, actor);
   if (firstError(log) !== null) return result(log);
 
   step(log, "run_simulation", {}, actor);
@@ -487,7 +449,7 @@ function applyAndNotifyInner(
     );
   }
 
-  step(
+  const posted = step(
     log,
     "post_shift_note",
     {
@@ -499,8 +461,16 @@ function applyAndNotifyInner(
   );
   if (firstError(log) !== null) return result(log);
 
-  // Never announce a note that was not stored.
-  if (useWorkshopStore.getState().notes.length === 0) {
+  // Never announce a note that was not stored — and it must be THIS run's
+  // note, on the scenario that was just applied, not any note lying around.
+  const noteId = posted.ok
+    ? (posted.data as { note?: { id: string } }).note?.id ?? null
+    : null;
+  const world = useWorkshopStore.getState();
+  const stored =
+    noteId !== null &&
+    world.notes.some((n) => n.id === noteId && n.scenarioId === world.activeScenarioId);
+  if (!stored) {
     return result(log, "The team was not notified — no shift note was stored.");
   }
 
@@ -517,22 +487,10 @@ function applyAndNotifyInner(
 export function reset(): StoryStepResult {
   const log: StoryCommandLog[] = [];
   cancelExploration();
+  // The store's command interception applies RESET_VIEW on success: the world
+  // is rebuilt by the human-only command, the view snaps to the opening frame,
+  // and the WebMCP link and viewport survive because they describe the room.
   step(log, "reset_demo", { story: "calm" }, "human");
-  if (firstError(log) !== null) return result(log);
-
-  useStoryDraftStore.getState().clearDraft();
-  // View state only. `story` is set directly because a reset is not one of the
-  // scripted transitions, and the WebMCP link and viewport describe the room,
-  // not the story, so they survive.
-  useWorkshopStore.setState({
-    selection: null,
-    playbackMinute: null,
-    agentAttention: null,
-    view: "board",
-    story: "calm",
-    exploration: IDLE_EXPLORATION,
-    popover: null,
-  });
   return result(log);
 }
 
@@ -548,16 +506,16 @@ export function useExploration(): ExplorationProgress {
 
 /** The draft the proposal card edits — null outside beat 4. */
 export function useDraftPlan(): Plan | null {
-  return useStoryDraftStore((s) => s.plan);
+  return useWorkshopStore((s) => s.draft);
 }
 
 export function useHumanEdited(): string[] {
-  return useStoryDraftStore((s) => s.humanEdited);
+  return useWorkshopStore((s) => s.humanEdited);
 }
 
 /** Why the last apply was refused — null when the plan has not been tried. */
 export function useApplyError(): string | null {
-  return useStoryDraftStore((s) => s.lastError);
+  return useWorkshopStore((s) => s.applyError);
 }
 
 /** The winner as the exploration reported it, before any human edit. */

@@ -11,12 +11,7 @@ import {
 import { COMMAND_NAMES, createInitialState, createMemoryContext, executeCommand } from "@/commands";
 import { simulate } from "@/simulation";
 import { WEBMCP_TOOL_NAMES } from "@/webmcp";
-import {
-  ETA_SPREAD_MINUTES,
-  STUB_CANDIDATE_PLANS,
-  rankCandidates,
-  runExplorationStub,
-} from "@/components/story/explorationStub";
+import { exploreSchedules, rankCandidates } from "@/simulation";
 import { IDLE_EXPLORATION, useWorkshopStore } from "./workshopStore";
 import {
   DEFAULT_NOTE_TEXT,
@@ -31,7 +26,6 @@ import {
   routeFromDrop,
   startEscalation,
   startExploration,
-  useStoryDraftStore,
   type StoryCommandLog,
 } from "./storySlice";
 
@@ -55,6 +49,9 @@ function view(story: "calm" | "escalated") {
     story: story === "calm" ? ("calm" as const) : ("escalation" as const),
     exploration: IDLE_EXPLORATION,
     popover: null,
+    draft: null,
+    humanEdited: [],
+    applyError: null,
   };
 }
 
@@ -70,7 +67,6 @@ async function explore() {
 
 beforeEach(() => {
   useWorkshopStore.setState(view("escalated"));
-  useStoryDraftStore.getState().clearDraft();
 });
 
 describe("beat 2 — escalation", () => {
@@ -110,17 +106,23 @@ describe("beat 3 — exploration", () => {
     );
   });
 
-  it("serves the search from the stub until explore_schedules lands", async () => {
+  it("serves the search from the one attributed command", async () => {
     const result = await explore();
-    expect(result.servedBy).toBe(COMMAND_NAMES.includes("explore_schedules") ? "command" : "stub");
+    expect(result.servedBy).toBe("command");
+    // Exactly one attributed search in the world's history.
+    const searches = useWorkshopStore
+      .getState()
+      .changes.filter((c) => c.command === "explore_schedules");
+    expect(searches).toHaveLength(1);
+    expect(searches[0].actor).toBe("agent");
   });
 
   it("measures every candidate instead of declaring a figure", async () => {
     const result = await explore();
     const summary = result.summary as ExplorationSummary;
-    expect(summary.candidatesEvaluated).toBe(STUB_CANDIDATE_PLANS.length);
-    expect(summary.replications).toBe(ETA_SPREAD_MINUTES.length);
-    expect(summary.runsExecuted).toBe(STUB_CANDIDATE_PLANS.length * ETA_SPREAD_MINUTES.length);
+    // The panel's numbers are the engine's own accounting of the one search.
+    expect(summary.candidatesEvaluated).toBeGreaterThan(50);
+    expect(summary.runsExecuted).toBe(summary.candidatesEvaluated * summary.replications);
     // Rates are shares of whole runs, never a decorative constant.
     for (const candidate of summary.top) {
       expect(candidate.promisesMetRate * summary.replications).toBeCloseTo(
@@ -128,14 +130,17 @@ describe("beat 3 — exploration", () => {
       );
     }
     // The ranking is the stated objective applied to what was measured.
-    expect(summary.top).toEqual(rankCandidates(summary.top));
+    expect([...summary.top].sort(rankCandidates)).toEqual(summary.top);
     expect(summary.best).toEqual(summary.top[0]);
+    // And the winner is measured perfect: 6/6 in every seeded world.
+    expect(summary.best?.promisesMet).toBe(6);
+    expect(summary.best?.promisesMetRate).toBe(1);
   });
 
-  it("reproduces the same measurement every run", async () => {
+  it("reproduces the same measurement every run", () => {
     const scenario = baseline();
-    const a = await runExplorationStub({ scenario, tickMs: 0 });
-    const b = await runExplorationStub({ scenario, tickMs: 0 });
+    const a = exploreSchedules(scenario, { seed: 7 });
+    const b = exploreSchedules(scenario, { seed: 7 });
     expect(a).toEqual(b);
   });
 
@@ -200,7 +205,7 @@ describe("beat 4 — the draft", () => {
     expect(routes).toEqual([
       { command: "route_work_item", workItemId: "veh-03", resourceId: "bay-1", position: 2 },
     ]);
-    expect(useStoryDraftStore.getState().humanEdited).toEqual(["veh-03"]);
+    expect(useWorkshopStore.getState().humanEdited).toEqual(["veh-03"]);
   });
 
   it("applies exactly the draft that was on screen", async () => {
@@ -210,10 +215,11 @@ describe("beat 4 — the draft", () => {
     const onScreen = structuredClone(draftPlan()!);
 
     const applied = applyAndNotify();
-    const sent = applied.commands
-      .filter((c) => c.name === "route_work_item" || c.name === "update_work_item")
-      .map((c) => c.input);
-    expect(sent).toEqual(onScreen.changes.map(planChangeInput));
+    // Finding 4: apply_plan receives a deep-equal copy of the edited draft.
+    const sent = applied.commands.find((c) => c.name === "apply_plan");
+    expect(sent).toBeDefined();
+    expect((sent!.input as { plan: Plan }).plan).toEqual(onScreen);
+    expect(applied.ok).toBe(true);
   });
 
   it("refuses to propose without a search", () => {
@@ -383,8 +389,7 @@ describe("reset", () => {
 
   it("runs a whole second take once the escalation is back", async () => {
     reset();
-    // Stand in for inject_event, which engine-explorer still owes us.
-    useWorkshopStore.setState(view("escalated"));
+    startEscalation();
     const searched = await explore();
     expect(searched.ok).toBe(true);
     expect(proposal().ok).toBe(true);

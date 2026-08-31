@@ -302,6 +302,8 @@ export const PlanChangeSchema = z.discriminatedUnion("command", [
     workItemId: z.string().min(1),
     resourceId: z.string().min(1).nullable(),
     position: z.number().int().min(1).nullable(),
+  }).refine((c) => c.resourceId !== null || c.position === null, {
+    message: "a released route (resourceId null) cannot carry a queue position",
   }),
 ]);
 export type PlanChange = z.infer<typeof PlanChangeSchema>;

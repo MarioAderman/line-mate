@@ -15,12 +15,16 @@ import { create } from "zustand";
 import type {
   Actor,
   ExplorationProgress,
+  ExplorationSummary,
+  Plan,
+  PlanChange,
   Scenario,
   Selection,
   StoryState,
   View,
 } from "@/domain";
 import { canTransition } from "@/domain";
+import { planFromCandidate } from "@/simulation";
 import {
   createInitialState,
   executeCommand,
@@ -73,6 +77,12 @@ export interface WorkshopStore extends WorkshopState {
   exploration: ExplorationProgress;
   popover: Popover | null;
   viewport: ViewportPreset;
+  /** Beat 4's unapplied proposal. A plan on screen is not a plan in the world. */
+  draft: Plan | null;
+  /** Work items the human retargeted inside the draft — attribution on the card. */
+  humanEdited: string[];
+  /** Why the last apply was refused — null when the plan has not been tried. */
+  applyError: string | null;
 
   run(name: string, input?: unknown, actor?: Actor): CommandResult;
   select(selection: Selection | null): void;
@@ -84,10 +94,34 @@ export interface WorkshopStore extends WorkshopState {
   setExploration(progress: ExplorationProgress): void;
   setPopover(popover: Popover | null): void;
   setViewport(viewport: ViewportPreset): void;
+  setDraft(plan: Plan | null): void;
+  /** Retargets a job inside the draft. No scenario is touched. */
+  routeInDraft(workItemId: string, resourceId: string | null, position?: number | null): void;
+  setApplyError(error: string | null): void;
+  clearDraft(): void;
 }
 
+/** View state a demo reset puts back to the opening frame. */
+export const RESET_VIEW = {
+  selection: null,
+  playbackMinute: null,
+  agentAttention: null,
+  view: "board",
+  story: "calm",
+  exploration: IDLE_EXPLORATION,
+  popover: null,
+  draft: null,
+  humanEdited: [],
+  applyError: null,
+} satisfies Partial<WorkshopStore>;
+
+/** Frames per second-ish pacing when an agent-run search is replayed. */
+const REPLAY_FRAME_MS = 80;
+let replayToken = 0;
+
 export const useWorkshopStore = create<WorkshopStore>((set, get) => ({
-  ...createInitialState(),
+  // The demo opens on the calm shop; the escalation is injected live.
+  ...createInitialState({ story: "calm" }),
   selection: null,
   playbackMinute: null,
   agentAttention: null,
@@ -95,10 +129,13 @@ export const useWorkshopStore = create<WorkshopStore>((set, get) => ({
   mcpToolCount: 0,
   lastResult: null,
   view: "board",
-  story: "escalation",
+  story: "calm",
   exploration: IDLE_EXPLORATION,
   popover: null,
   viewport: "laptop",
+  draft: null,
+  humanEdited: [],
+  applyError: null,
 
   run: (name, input = {}, actor: Actor = "human") => {
     const ctx: CommandContext = {
@@ -120,6 +157,7 @@ export const useWorkshopStore = create<WorkshopStore>((set, get) => ({
       }
     }
     set(patch);
+    if (result.ok) advanceStoryAfterCommand(name, input, result.data, get, set);
     return result;
   },
   select: (selection) => set({ selection }),
@@ -136,7 +174,143 @@ export const useWorkshopStore = create<WorkshopStore>((set, get) => ({
   setViewport: (viewport) => set({ viewport }),
   setMcpStatus: (mcpStatus, toolCount) =>
     set((state) => ({ mcpStatus, mcpToolCount: toolCount ?? state.mcpToolCount })),
+  setDraft: (draft) => set({ draft, humanEdited: [], applyError: null }),
+  setApplyError: (applyError) => set({ applyError }),
+  clearDraft: () => set({ draft: null, humanEdited: [], applyError: null }),
+  routeInDraft: (workItemId, resourceId, position = 1) =>
+    set((state) => {
+      if (!state.draft) return state;
+      const change: PlanChange = {
+        command: "route_work_item",
+        workItemId,
+        resourceId,
+        // A released route has no queue; the schema enforces the same rule.
+        position: resourceId === null ? null : position,
+      };
+      const existing = state.draft.changes.findIndex(
+        (c) => c.command === "route_work_item" && c.workItemId === workItemId,
+      );
+      const changes =
+        existing === -1
+          ? [...state.draft.changes, change]
+          : state.draft.changes.map((c, i) => (i === existing ? change : c));
+      return {
+        draft: { ...state.draft, changes },
+        applyError: null,
+        humanEdited: state.humanEdited.includes(workItemId)
+          ? state.humanEdited
+          : [...state.humanEdited, workItemId],
+      };
+    }),
 }));
+
+/* ----------------------------------------- story lifecycle from commands */
+
+type Get = () => WorkshopStore;
+type Set = (partial: Partial<WorkshopStore>) => void;
+
+function applyStory(to: StoryState, get: Get, set: Set): boolean {
+  const current = get().story;
+  if (to !== current && !canTransition(current, to)) return false;
+  set({ story: to });
+  return true;
+}
+
+function doneFrame(summary: ExplorationSummary): ExplorationProgress {
+  return {
+    status: "done",
+    runsExecuted: summary.runsExecuted,
+    runsPlanned: summary.runsExecuted,
+    rows: summary.top.map((c) => ({
+      id: c.id,
+      label: c.label,
+      progress: 1,
+      promisesMet: c.promisesMet,
+      promisesMetRate: c.promisesMetRate,
+    })),
+    best: summary.best,
+  };
+}
+
+/**
+ * The story the SCREEN shows must follow the world no matter who moved it —
+ * the UI beats or the external WebMCP agent (finding 2). The storySlice path
+ * drives its own presentation and marks its search with `includeTrace`, so
+ * this only auto-drives the calls that did not come from the slice. Every
+ * move goes through the same transition guard the UI uses; an illegal beat is
+ * simply not taken.
+ */
+function advanceStoryAfterCommand(
+  name: string,
+  input: unknown,
+  data: unknown,
+  get: Get,
+  set: Set,
+): void {
+  const payload = (input ?? {}) as { includeTrace?: boolean; plan?: Plan };
+
+  if (name === "reset_demo") {
+    replayToken += 1;
+    set(RESET_VIEW);
+    return;
+  }
+
+  if (name === "inject_event") {
+    applyStory("escalation", get, set);
+    return;
+  }
+
+  if (name === "explore_schedules" && !payload.includeTrace) {
+    const summary = data as ExplorationSummary & { trace?: ExplorationProgress[] };
+    applyStory("running", get, set);
+    const finish = () => {
+      set({ exploration: doneFrame(summary) });
+      if (applyStory("proposal", get, set) && summary.best && !get().draft) {
+        set({ draft: planFromCandidate(summary.best), humanEdited: [], applyError: null });
+      }
+    };
+    const trace = summary.trace ?? [];
+    if (typeof window === "undefined" || trace.length === 0) {
+      finish();
+      return;
+    }
+    // Replay the one search's own frames; a newer run or a reset cancels it.
+    replayToken += 1;
+    const token = replayToken;
+    set({ exploration: { ...IDLE_EXPLORATION, status: "running" } });
+    trace.forEach((frame, index) => {
+      window.setTimeout(() => {
+        if (replayToken === token) set({ exploration: frame });
+      }, REPLAY_FRAME_MS * (index + 1));
+    });
+    window.setTimeout(
+      () => {
+        if (replayToken === token) finish();
+      },
+      REPLAY_FRAME_MS * (trace.length + 1),
+    );
+    return;
+  }
+
+  if (name === "apply_plan") {
+    if (!get().draft && payload.plan) {
+      set({ draft: structuredClone(payload.plan), applyError: null });
+    }
+    return;
+  }
+
+  if (name === "post_shift_note") {
+    const state = get();
+    if (state.story !== "proposal") return;
+    const totals = state.simulations[state.activeScenarioId]?.totals;
+    const note = (data as { note?: { id: string; scenarioId: string } }).note;
+    const stored =
+      note && state.notes.some((n) => n.id === note.id && n.scenarioId === state.activeScenarioId);
+    if (totals && totals.promisesMet === totals.promisedTotal && stored) {
+      applyStory("resolved", get, set);
+    }
+  }
+}
 
 /** Non-reactive access, for effects and the WebMCP adapter. */
 export function runCommand(name: string, input?: unknown, actor: Actor = "agent"): CommandResult {
