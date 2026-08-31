@@ -66,6 +66,20 @@ export function buildWebMcpTools(run: CommandRunner): WebMcpTool[] {
       readOnlyHint: command.kind === "read",
       untrustedContentHint: false,
     },
-    execute: async (args: unknown) => formatResult(run(command.name, args ?? {})),
+    execute: async (args: unknown) => {
+      const result = run(command.name, args ?? {});
+      // Bounded responses: the exploration trace is page-internal animation
+      // data (the command always computes it so the shop can show the search
+      // running). It reaches the agent only on an explicit includeTrace: true.
+      const askedForTrace =
+        typeof args === "object" &&
+        args !== null &&
+        (args as { includeTrace?: boolean }).includeTrace === true;
+      if (result.ok && command.name === "explore_schedules" && !askedForTrace) {
+        const { trace: _trace, ...data } = result.data as { trace?: unknown } & Record<string, unknown>;
+        return formatResult({ ...result, data });
+      }
+      return formatResult(result);
+    },
   }));
 }

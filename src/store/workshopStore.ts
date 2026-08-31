@@ -261,7 +261,12 @@ function advanceStoryAfterCommand(
     return;
   }
 
-  if (name === "explore_schedules" && !payload.includeTrace) {
+  // Every agent search animates: the command always carries its measured
+  // trace, so the replay no longer depends on the agent asking for it (live
+  // test 2: Codex naturally sends includeTrace:false). The story slice's own
+  // human path sets story to "running" before it runs and replays frames
+  // itself — the guard keeps this interception off that path.
+  if (name === "explore_schedules" && get().story !== "running") {
     const summary = data as ExplorationSummary & { trace?: ExplorationProgress[] };
     applyStory("running", get, set);
     const finish = () => {

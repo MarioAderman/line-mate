@@ -126,6 +126,25 @@ describe("tool execution", () => {
     expect(JSON.parse(result.content[0].text).scenario.id).toBe(ctx.state.activeScenarioId);
   });
 
+  it("strips the exploration trace unless the agent asked for it", async () => {
+    const { run } = runner();
+    const explore = buildWebMcpTools(run).find((t) => t.name === "explore_schedules")!;
+    const bare = JSON.parse((await explore.execute({ replications: 4 })).content[0].text);
+    expect(bare.trace).toBeUndefined();
+    expect(bare.best).not.toBeNull();
+    expect(JSON.stringify(bare).length).toBeLessThan(20_000);
+  });
+
+  it("returns the trace on an explicit includeTrace: true", async () => {
+    const { run } = runner();
+    const explore = buildWebMcpTools(run).find((t) => t.name === "explore_schedules")!;
+    const traced = JSON.parse(
+      (await explore.execute({ replications: 4, includeTrace: true })).content[0].text,
+    );
+    expect(Array.isArray(traced.trace)).toBe(true);
+    expect(traced.trace.length).toBeGreaterThan(0);
+  });
+
   it("marks validation failures as tool errors", async () => {
     const update = buildWebMcpTools(runner().run).find((t) => t.name === "update_resource")!;
     const result = await update.execute({ resourceId: "bay-1", changes: {} });

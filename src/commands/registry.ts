@@ -1124,7 +1124,10 @@ const exploreSchedulesCommand: CommandDefinition = {
       actor: ctx.actor,
       headline,
       ...summary,
-      ...(input.includeTrace ? { trace } : {}),
+      // Always part of the command result so the page can animate the search;
+      // the WebMCP layer strips it from agent responses unless includeTrace
+      // was requested (bounded-response rule).
+      trace,
     };
   },
 };

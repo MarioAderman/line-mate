@@ -385,12 +385,17 @@ describe("explore_schedules", () => {
   });
 
   it("returns a shortlist, not the whole search", () => {
-    const data = ok<ExplorationSummary>(
+    const data = ok<ExplorationSummary & { trace?: unknown[] }>(
       executeCommand(createMemoryContext("agent"), "explore_schedules", { replications: 4 }),
     );
     expect(data.top.length).toBeLessThanOrEqual(8);
     expect(data.candidatesEvaluated).toBeGreaterThan(data.top.length);
-    expect(JSON.stringify(data).length).toBeLessThan(20_000);
+    // The command always carries the animation trace for the page; everything
+    // else stays a bounded shortlist. The WebMCP layer strips the trace from
+    // agent responses (covered in src/webmcp/adapter.test.ts).
+    expect(Array.isArray(data.trace)).toBe(true);
+    const { trace: _trace, ...bounded } = data;
+    expect(JSON.stringify(bounded).length).toBeLessThan(20_000);
   });
 
   it("records one attributed change quoting the measured result", () => {
