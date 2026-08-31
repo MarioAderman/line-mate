@@ -9,8 +9,14 @@
 import { z } from "zod";
 import {
   BASELINE_SCENARIO_ID,
+  DisruptionSchema,
+  NoteChannelSchema,
+  PlanSchema,
   ResourceSchema,
   ScenarioSchema,
+  ShiftNoteSchema,
+  applyDisruption,
+  describeDisruption,
   findResource,
   findTechnician,
   findWorkItem,
@@ -19,10 +25,21 @@ import {
   validateScenario,
   type Actor,
   type Change,
+  type Disruption,
+  type NoteChannel,
+  type Plan,
+  type PlanChange,
   type Scenario,
+  type ShiftNote,
   type WorkItem,
 } from "@/domain";
-import { compareScenarios, simulate, type SimulationResult } from "@/simulation";
+import {
+  compareScenarios,
+  describeExploration,
+  exploreSchedules,
+  simulate,
+  type SimulationResult,
+} from "@/simulation";
 import type { CommandContext, WorkshopState } from "./state";
 
 export class CommandError extends Error {}
@@ -735,6 +752,324 @@ const activateScenario: CommandDefinition = {
   },
 };
 
+/* --------------------------------------------- story: disruption & plans */
+
+/**
+ * Demo control, not an agent tool: the story moves from calm to escalation
+ * by injecting the part delay into the live world rather than by loading a
+ * second fixture. Only the human at the screen (or the simulation itself)
+ * may fire it.
+ */
+const injectEvent: CommandDefinition = {
+  name: "inject_event",
+  kind: "mutation",
+  title: "Inject event",
+  description:
+    "Apply an operational disruption to a scenario — the demo's water pump " +
+    "delay blocks Bay 3 until the part lands, and the job sitting there goes " +
+    "back to a full replacement. Drives the story; not exposed to the agent.",
+  input: z.object({ scenarioId: scenarioRef, disruption: DisruptionSchema }),
+  run: (ctx, raw) => {
+    const input = raw as { scenarioId?: string; disruption: Disruption };
+    if (ctx.actor === "agent") {
+      throw new CommandError(
+        "inject_event is a demo control for the human and the simulation. " +
+          "The agent observes disruptions through inspect_system and inspect_resource.",
+      );
+    }
+    const state = ctx.getState();
+    const scenario = resolveScenario(state, input.scenarioId);
+    const disruption = input.disruption;
+    const resource = findResource(scenario, disruption.resourceId);
+    if (!resource) {
+      throw new CommandError(
+        `Unknown resource "${disruption.resourceId}". Known: ${scenario.resources
+          .map((r) => r.id)
+          .join(", ")}.`,
+      );
+    }
+    if (disruption.workItemId && !findWorkItem(scenario, disruption.workItemId)) {
+      throw new CommandError(`Unknown work item "${disruption.workItemId}".`);
+    }
+
+    const next = applyDisruption(scenario, disruption);
+    const summary = describeDisruption(disruption, next);
+    const before = {
+      status: resource.status,
+      blockedUntilMinute: resource.blockedUntilMinute,
+      blockingReason: resource.blockingReason,
+    };
+    const updated = findResource(next, disruption.resourceId)!;
+    const after = {
+      status: updated.status,
+      blockedUntilMinute: updated.blockedUntilMinute,
+      blockingReason: updated.blockingReason,
+    };
+
+    assertScenarioValid(next);
+    let changeId = "";
+    ctx.setState((s) => {
+      const carrying: WorkshopState = {
+        ...withScenario(s, next),
+        disruptions: {
+          ...s.disruptions,
+          [next.id]: [...(s.disruptions[next.id] ?? []), disruption],
+        },
+      };
+      const result = withChange(carrying, ctx, {
+        command: "inject_event",
+        scenarioId: next.id,
+        summary,
+        before,
+        after,
+      });
+      changeId = result.changeId;
+      return result.state;
+    });
+
+    return {
+      changeId,
+      actor: ctx.actor,
+      scenarioId: next.id,
+      summary,
+      before,
+      after,
+      simulationInvalidated: true,
+      disruption,
+    };
+  },
+};
+
+/**
+ * Applies one plan change with exactly the validation `update_work_item` and
+ * `route_work_item` apply, so a plan can never do something the individual
+ * commands would have refused.
+ */
+function applyValidatedPlanChange(scenario: Scenario, change: PlanChange): Scenario {
+  const item = findWorkItem(scenario, change.workItemId);
+  if (!item) {
+    throw new CommandError(
+      `Unknown work item "${change.workItemId}". Known: ${scenario.workItems
+        .map((w) => w.id)
+        .join(", ")}.`,
+    );
+  }
+  const replace = (updated: WorkItem): Scenario => ({
+    ...scenario,
+    workItems: scenario.workItems.map((w) => (w.id === updated.id ? updated : w)),
+  });
+  if (change.command === "update_work_item") {
+    return replace({ ...item, priority: change.priority });
+  }
+  if (change.resourceId !== null) {
+    const target = findResource(scenario, change.resourceId);
+    if (!target) throw new CommandError(`Unknown resource "${change.resourceId}".`);
+    if (!item.steps.some((s) => s.requiredResourceType === target.type)) {
+      throw new CommandError(
+        `${item.vehicle} cannot be routed to ${target.name}: none of its steps run on a ${target.type}.`,
+      );
+    }
+  }
+  return replace({
+    ...item,
+    route: { resourceId: change.resourceId, position: change.position },
+  });
+}
+
+const PLAN_SUMMARY_PARTS = 4;
+
+const applyPlan: CommandDefinition = {
+  name: "apply_plan",
+  kind: "mutation",
+  title: "Apply plan",
+  description:
+    "Apply a whole schedule plan — the ordered priority and routing changes " +
+    "explore_schedules returned, or the version the manager edited — as one " +
+    "attributed change. Same validation as the individual commands, and the " +
+    "baseline stays protected: branch with create_scenario first.",
+  input: z.object({
+    scenarioId: scenarioRef,
+    plan: PlanSchema,
+    allowBaselineEdit: allowBaseline,
+  }),
+  run: (ctx, raw) => {
+    const input = raw as { scenarioId?: string; plan: Plan; allowBaselineEdit?: boolean };
+    const state = ctx.getState();
+    const scenario = resolveScenario(state, input.scenarioId);
+    assertMutable(ctx, scenario, input.allowBaselineEdit);
+
+    const touched = [...new Set(input.plan.changes.map((c) => c.workItemId))];
+    const snapshot = (source: Scenario) =>
+      Object.fromEntries(
+        touched.map((id) => {
+          const item = findWorkItem(source, id);
+          return [id, item ? { priority: item.priority, route: item.route } : null];
+        }),
+      );
+
+    const before = snapshot(scenario);
+    const next = input.plan.changes.reduce(applyValidatedPlanChange, scenario);
+    const after = snapshot(next);
+
+    const priorityChanges = input.plan.changes.filter(
+      (c) => c.command === "update_work_item",
+    ).length;
+    const parts: string[] = [];
+    if (priorityChanges > 0) {
+      parts.push(`${priorityChanges} priority change${priorityChanges === 1 ? "" : "s"}`);
+    }
+    for (const change of input.plan.changes) {
+      if (change.command !== "route_work_item") continue;
+      const item = findWorkItem(next, change.workItemId)!;
+      parts.push(`${item.vehicle} → ${describeRoute(item, next)}`);
+    }
+    const shown = parts.slice(0, PLAN_SUMMARY_PARTS).join("; ");
+    const hidden = parts.length - Math.min(parts.length, PLAN_SUMMARY_PARTS);
+
+    return {
+      ...commit(ctx, next, {
+        command: "apply_plan",
+        scenarioId: next.id,
+        summary:
+          `Applied "${input.plan.label}" (${input.plan.changes.length} changes): ` +
+          `${shown}${hidden > 0 ? ` +${hidden} more` : ""}.`,
+        before,
+        after,
+      }),
+      planId: input.plan.id,
+      changesApplied: input.plan.changes.length,
+      workItemsTouched: touched,
+    };
+  },
+};
+
+const CHANNEL_LABELS: Record<NoteChannel, string> = {
+  slack: "Slack",
+  email: "email",
+  sms: "SMS",
+};
+
+/**
+ * Simulated on purpose (CLAUDE.md: no backend, no real integrations). The
+ * note becomes state the resolved card renders as channel chips; nothing
+ * leaves the page.
+ */
+const postShiftNote: CommandDefinition = {
+  name: "post_shift_note",
+  kind: "mutation",
+  title: "Post shift note",
+  description:
+    "Tell the team what changed. Stores a shift note against the scenario " +
+    "with the channels it would go out on (slack, email, sms). Simulated " +
+    "inside the page for the demo: no message is actually sent anywhere.",
+  input: z.object({
+    scenarioId: scenarioRef,
+    text: z.string().min(1).max(400),
+    channels: z.array(NoteChannelSchema).min(1).max(3),
+    recipients: z.array(z.string().min(1).max(80)).max(10).optional(),
+  }),
+  run: (ctx, raw) => {
+    const input = raw as {
+      scenarioId?: string;
+      text: string;
+      channels: NoteChannel[];
+      recipients?: string[];
+    };
+    const scenario = resolveScenario(ctx.getState(), input.scenarioId);
+    const channels = [...new Set(input.channels)];
+    const summary =
+      `Shift note to ${channels.map((c) => CHANNEL_LABELS[c]).join(", ")} (simulated): ` +
+      `"${input.text.length > 80 ? `${input.text.slice(0, 79)}…` : input.text}"`;
+
+    let changeId = "";
+    let note!: ShiftNote;
+    // Both ids come from the same sequence read, inside the same update.
+    ctx.setState((s) => {
+      note = ShiftNoteSchema.parse({
+        id: `NOTE-${s.sequence}`,
+        at: ctx.now(),
+        author: ctx.actor,
+        scenarioId: scenario.id,
+        text: input.text,
+        channels,
+        recipients: input.recipients ?? [],
+      });
+      const result = withChange({ ...s, notes: [...s.notes, note] }, ctx, {
+        command: "post_shift_note",
+        scenarioId: scenario.id,
+        summary,
+        before: null,
+        after: { noteId: note.id, channels: note.channels },
+      });
+      changeId = result.changeId;
+      return result.state;
+    });
+
+    return {
+      changeId,
+      actor: ctx.actor,
+      scenarioId: scenario.id,
+      summary,
+      note,
+      /** Never true: the chips are rendered state, not a delivery receipt. */
+      delivered: false,
+      simulated: true,
+    };
+  },
+};
+
+/* ------------------------------------------------- action: exploration */
+
+const exploreSchedulesCommand: CommandDefinition = {
+  name: "explore_schedules",
+  kind: "action",
+  title: "Explore schedules",
+  description:
+    "Search for a better shift. Generates a bounded set of alternative " +
+    "schedules (promised jobs first, bay pins, queue positions, released " +
+    "pins) and scores each one across seeded replications of the day, so the " +
+    "answer carries how often it holds, not just one lucky run. Deterministic: " +
+    "the same seed always returns the same ranking. Returns the best plan and " +
+    "up to eight runners-up, ready to hand to apply_plan.",
+  input: z.object({
+    scenarioId: scenarioRef,
+    seed: z.number().int().min(0).max(0xffffffff).optional(),
+    replications: z.number().int().min(1).max(64).optional(),
+  }),
+  run: (ctx, raw) => {
+    const input = raw as { scenarioId?: string; seed?: number; replications?: number };
+    const state = ctx.getState();
+    const scenario = resolveScenario(state, input.scenarioId);
+    const summary = exploreSchedules(scenario, {
+      seed: input.seed,
+      replications: input.replications,
+    });
+    const headline = describeExploration(summary);
+
+    let changeId = "";
+    ctx.setState((s) => {
+      const result = withChange(s, ctx, {
+        command: "explore_schedules",
+        scenarioId: scenario.id,
+        summary: headline,
+        before: null,
+        after: summary.best
+          ? {
+              candidateId: summary.best.id,
+              label: summary.best.label,
+              promisesMet: summary.best.promisesMet,
+              promisesMetRate: summary.best.promisesMetRate,
+            }
+          : null,
+      });
+      changeId = result.changeId;
+      return result.state;
+    });
+
+    return { changeId, actor: ctx.actor, headline, ...summary };
+  },
+};
+
 /* -------------------------------------------------------------- registry */
 
 export const COMMANDS: CommandDefinition[] = [
@@ -747,7 +1082,11 @@ export const COMMANDS: CommandDefinition[] = [
   updateResource,
   updateWorkItem,
   routeWorkItem,
+  injectEvent,
+  applyPlan,
+  postShiftNote,
   runSimulation,
+  exploreSchedulesCommand,
   activateScenario,
 ];
 

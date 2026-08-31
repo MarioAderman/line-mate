@@ -47,7 +47,7 @@ describe("feature detection", () => {
 });
 
 describe("registration", () => {
-  it("registers the ten v0.1 tools with current titles and annotations", async () => {
+  it("registers the thirteen agent tools with current titles and annotations", async () => {
     const registered: WebMcpTool[] = [];
     withDocument({
       registerTool: async (tool: WebMcpTool) => {
@@ -57,7 +57,7 @@ describe("registration", () => {
 
     const registration = await registerWebMcpTools(runner().run);
     expect(registration.status).toBe("linked");
-    expect(registration.toolCount).toBe(10);
+    expect(registration.toolCount).toBe(13);
     expect(registered.map((t) => t.name).sort()).toEqual([...WEBMCP_TOOL_NAMES].sort());
 
     const readOnly = registered.filter((t) => t.annotations.readOnlyHint).map((t) => t.name).sort();
@@ -72,9 +72,17 @@ describe("registration", () => {
     }
   });
 
-  it("does not expose the human-only view switch", () => {
+  it("does not expose the human-only view switch or the demo control", () => {
     const names = buildWebMcpTools(runner().run).map((t) => t.name);
     expect(names).not.toContain("activate_scenario");
+    expect(names).not.toContain("inject_event");
+  });
+
+  it("exposes the story tools the agent drives in beats 3 and 5", () => {
+    const names = buildWebMcpTools(runner().run).map((t) => t.name);
+    expect(names).toContain("explore_schedules");
+    expect(names).toContain("apply_plan");
+    expect(names).toContain("post_shift_note");
   });
 
   it("hands the host an abort signal and aborts it on dispose", async () => {
@@ -85,7 +93,7 @@ describe("registration", () => {
       },
     });
     const registration = await registerWebMcpTools(runner().run);
-    expect(signals).toHaveLength(10);
+    expect(signals).toHaveLength(13);
     expect(signals.every((s) => !s.aborted)).toBe(true);
     registration.dispose();
     expect(signals.every((s) => s.aborted)).toBe(true);
