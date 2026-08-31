@@ -23,6 +23,7 @@ import {
   type WorkItem,
 } from "@/domain";
 import { compareScenarios, simulate, type SimulationResult } from "@/simulation";
+import { createInitialState } from "./state";
 import type { CommandContext, WorkshopState } from "./state";
 
 export class CommandError extends Error {}
@@ -735,6 +736,24 @@ const activateScenario: CommandDefinition = {
   },
 };
 
+const resetDemo: CommandDefinition = {
+  name: "reset_demo",
+  kind: "mutation",
+  title: "Reset demo",
+  description:
+    "Rebuild the whole world to the fixture — the demo's reset button. A " +
+    "human control for recording takes; the agent is never offered it.",
+  input: z.object({ story: z.enum(["calm", "escalated"]).optional() }),
+  run: (ctx, raw) => {
+    const { story } = raw as { story?: "calm" | "escalated" };
+    if (ctx.actor === "agent") {
+      throw new CommandError("reset_demo is a human demo control, not an agent tool.");
+    }
+    ctx.setState(() => createInitialState({ story: story ?? "calm" }));
+    return { reset: true, story: story ?? "calm" };
+  },
+};
+
 /* -------------------------------------------------------------- registry */
 
 export const COMMANDS: CommandDefinition[] = [
@@ -749,6 +768,7 @@ export const COMMANDS: CommandDefinition[] = [
   routeWorkItem,
   runSimulation,
   activateScenario,
+  resetDemo,
 ];
 
 export const COMMAND_NAMES = COMMANDS.map((c) => c.name);

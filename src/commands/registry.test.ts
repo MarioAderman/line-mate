@@ -38,7 +38,9 @@ function applyBeat(ctx: CommandContext, beat: DemoBeat, scenarioId: string) {
 
 describe("registry", () => {
   it("exposes the v0.1 tool set plus the human-only view switch", () => {
-    expect([...COMMAND_NAMES].sort()).toEqual([...AGENT_TOOLS, "activate_scenario"].sort());
+    expect([...COMMAND_NAMES].sort()).toEqual(
+      [...AGENT_TOOLS, "activate_scenario", "reset_demo"].sort(),
+    );
   });
 
   it("rejects unknown commands without throwing", () => {
