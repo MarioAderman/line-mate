@@ -223,10 +223,18 @@ const commandRunner: ExplorationRunner = async ({
   if (!call.ok) throw new ExplorationFailed(call.error);
   const data = call.data as ExplorationSummary & { trace?: ExplorationProgress[] };
   const { trace = [], ...summary } = data;
-  for (const frame of trace) {
+  // Absolute deadlines, not sleeps between frames: rendering cost (motion
+  // springs, panel layout) would otherwise pile on top of every tick and
+  // stretch the 15s replay well past its budget. A slow frame just shortens
+  // the next wait.
+  const start = performance.now();
+  for (let index = 0; index < trace.length; index += 1) {
     if (signal?.aborted) throw new ExplorationAborted();
-    if (tickMs > 0) await new Promise((resolve) => setTimeout(resolve, tickMs));
-    onProgress?.(frame);
+    if (tickMs > 0) {
+      const wait = start + tickMs * (index + 1) - performance.now();
+      if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+    }
+    onProgress?.(trace[index]);
   }
   return summary;
 };
