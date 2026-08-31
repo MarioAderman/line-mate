@@ -4,7 +4,7 @@
 manager and a browser agent run the same operation, live — the agent explores real recovery
 plans, the manager keeps authority. Built for the 2026 WebMCP Challenge.
 
-> 🚗 **Live PWA:** _coming soon_ <!-- TODO: public URL after VPS deploy -->
+> 🚗 **Live PWA:** https://line-mate.vercel.app
 > 🎬 **Demo video:** _coming soon_ <!-- TODO: video link after recording -->
 
 ## What this is
