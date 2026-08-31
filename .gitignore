@@ -45,3 +45,6 @@ next-env.d.ts
 /.claude/.context-guard/
 /.codex/
 /CLAUDE.local.md
+
+# Personal planning transcript stays local
+/dev/active/foundation/source-conversation-transcript.md
