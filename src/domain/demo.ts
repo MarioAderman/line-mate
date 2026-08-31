@@ -38,14 +38,22 @@ export const AGENT_PLAN: DemoBeat = {
   expectedPromisesMet: 5,
 };
 
-/** Beat 3: the manager puts the white SUV into Bay 3 the moment it opens (frees Bay 2 for the wagon). */
+/**
+ * Beat 3: the manager's shop-floor insight, two moves that belong together —
+ * the white SUV takes Bay 3 the minute the pump lands, and the brown van
+ * rolls OFF the lift to finish wherever a bay frees up. Without the second
+ * move the plan is fragile: whenever the part lands while Ana is mid
+ * walk-in diagnosis, the van grabs Bay 3 back and the SUV never starts
+ * (measured: 6/6 in only ~42 % of seeded worlds pinned, 100 % released).
+ */
 export const HUMAN_DECISION: DemoBeat = {
   id: "human-decision",
   scenarioName: "Human + agent",
   description:
-    "The white SUV takes Bay 3 first when the part arrives; the van waits its turn.",
+    "The white SUV takes Bay 3 the moment the part lands; the van rolls off the lift and finishes in any free bay.",
   changes: [
     { command: "route_work_item", workItemId: "veh-03", resourceId: "bay-3", position: 1 },
+    { command: "route_work_item", workItemId: "veh-12", resourceId: null, position: null },
   ],
   expectedPromisesMet: 6,
 };

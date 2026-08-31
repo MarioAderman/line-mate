@@ -42,7 +42,7 @@ describe("calm → escalated", () => {
 describe("plans", () => {
   it("demo beats are valid plans", () => {
     expect(PlanSchema.parse(planFromBeat(AGENT_PLAN)).changes).toHaveLength(7);
-    expect(PlanSchema.parse(planFromBeat(HUMAN_DECISION)).changes).toHaveLength(1);
+    expect(PlanSchema.parse(planFromBeat(HUMAN_DECISION)).changes).toHaveLength(2);
   });
 
   it("the story numbers still hold: 4/6 → 5/6 → 6/6", () => {
