@@ -20,9 +20,9 @@ const mono = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Operational Simulation Lab",
+  title: "Line-Mate",
   description:
-    "A WebMCP-native workshop simulation where a manager and an external browser agent recover a failing schedule together.",
+    "One more technician on the line: a WebMCP-native shop floor where the manager and a browser agent recover a failing schedule together — the manager keeps authority.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

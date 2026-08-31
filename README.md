@@ -1,7 +1,8 @@
-# Operational Simulation Lab
+# Line-Mate
 
-**A WebMCP-native operational simulation where a human manager and a browser agent run the same
-shop, live.** Built for the 2026 WebMCP Challenge.
+**One more technician on the line.** Line-Mate is a WebMCP-native shop floor where a human
+manager and a browser agent run the same operation, live — the agent explores real recovery
+plans, the manager keeps authority. Built for the 2026 WebMCP Challenge.
 
 > 🚗 **Live PWA:** _coming soon_ <!-- TODO: public URL after VPS deploy -->
 > 🎬 **Demo video:** _coming soon_ <!-- TODO: video link after recording -->
