@@ -1067,16 +1067,20 @@ function Post({ frame, a, b, stroke }: { frame: IsoFrame; a: number; b: number; 
 /* ------------------------------------------------------------ diagnostics */
 
 function Diagnostics({ frame, car }: { frame: IsoFrame; car: { bodyKind: IsoBodyKind; tone: Tone } | null }) {
-  const booth: IsoZone = { a0: DIAGNOSTICS.a1 - 0.95, a1: DIAGNOSTICS.a1 - 0.1, b0: DIAGNOSTICS.b0 + 0.2, b1: DIAGNOSTICS.b1 - 0.2 };
+  // A compact console on the near-b corner of the pad. The car parks on the
+  // far-b side, so the two projections stay fully disjoint on screen: the
+  // car's largest a-b reach (11.25 - 9.14) never crosses the booth's smallest
+  // (10.9 - 8.5).
+  const booth: IsoZone = { a0: DIAGNOSTICS.a1 - 1.5, a1: DIAGNOSTICS.a1 - 0.15, b0: DIAGNOSTICS.b0 + 0.2, b1: DIAGNOSTICS.b0 + 1.2 };
   const boothZ = 0.95;
   return (
     <g>
+      {car ? (
+        <Car frame={frame} a={DIAGNOSTICS.a0 + 0.9} b={DIAGNOSTICS.b1 - 1.05} heading="a+" bodyKind={car.bodyKind} tone={car.tone} length={1.7} />
+      ) : null}
       <path d={frame.face(booth.a0, booth.b1, booth.a1, booth.b1, 0, boothZ)} fill="var(--paper)" stroke="var(--ink)" strokeWidth={1.1} />
       <path d={frame.face(booth.a1, booth.b0, booth.a1, booth.b1, 0, boothZ)} fill="var(--paper-2)" stroke="var(--ink)" strokeWidth={1.1} />
       <path d={frame.quad(booth, boothZ)} fill="var(--sheet)" stroke="var(--ink)" strokeWidth={1.1} />
-      {car ? (
-        <Car frame={frame} a={DIAGNOSTICS.a0 + 1.0} b={(DIAGNOSTICS.b0 + DIAGNOSTICS.b1) / 2} heading="a+" bodyKind={car.bodyKind} tone={car.tone} />
-      ) : null}
     </g>
   );
 }
