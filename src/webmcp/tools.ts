@@ -76,7 +76,8 @@ export function buildWebMcpTools(run: CommandRunner): WebMcpTool[] {
         args !== null &&
         (args as { includeTrace?: boolean }).includeTrace === true;
       if (result.ok && command.name === "explore_schedules" && !askedForTrace) {
-        const { trace: _trace, ...data } = result.data as { trace?: unknown } & Record<string, unknown>;
+        const data = { ...(result.data as Record<string, unknown>) };
+        delete data.trace;
         return formatResult({ ...result, data });
       }
       return formatResult(result);

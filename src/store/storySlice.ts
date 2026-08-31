@@ -521,6 +521,11 @@ export function useHumanEdited(): string[] {
   return useWorkshopStore((s) => s.humanEdited);
 }
 
+/** Work items the agent retargeted inside the draft, via WebMCP. */
+export function useAgentEdited(): string[] {
+  return useWorkshopStore((s) => s.agentEdited);
+}
+
 /** Why the last apply was refused — null when the plan has not been tried. */
 export function useApplyError(): string | null {
   return useWorkshopStore((s) => s.applyError);

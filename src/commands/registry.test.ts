@@ -394,7 +394,8 @@ describe("explore_schedules", () => {
     // else stays a bounded shortlist. The WebMCP layer strips the trace from
     // agent responses (covered in src/webmcp/adapter.test.ts).
     expect(Array.isArray(data.trace)).toBe(true);
-    const { trace: _trace, ...bounded } = data;
+    const bounded = { ...data };
+    delete bounded.trace;
     expect(JSON.stringify(bounded).length).toBeLessThan(20_000);
   });
 

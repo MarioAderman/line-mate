@@ -25,6 +25,12 @@ export function applyDisruption(scenario: Scenario, disruption: Disruption): Sce
   resource.status = "blocked";
   resource.blockedUntilMinute = disruption.untilMinute;
   resource.blockingReason = disruption.reason;
+  // The scenario's own description must tell the truth too: an agent reads
+  // it before anything else, and the calm copy would misbrief it.
+  next.description =
+    `Friday 14:15. ${resource.name} is blocked — ` +
+    `${disruption.reason.charAt(0).toLowerCase()}${disruption.reason.slice(1)}. ` +
+    "Promised jobs are at risk until the schedule answers.";
   if (disruption.workItemId) {
     const item = next.workItems.find((w) => w.id === disruption.workItemId);
     if (item) {

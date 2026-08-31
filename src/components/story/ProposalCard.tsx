@@ -16,6 +16,7 @@ import {
   applyAndNotify,
   routeFromDrop,
   useApplyError,
+  useAgentEdited,
   useDraftPlan,
   useExploration,
   useHumanEdited,
@@ -44,15 +45,26 @@ function errorHeadline(error: string): string {
   return first.endsWith(".") ? first : `${first}.`;
 }
 
+/** Footer copy: whose hands have touched the draft so far. */
+function draftFooter(yours: number, agents: number): string {
+  if (yours === 0 && agents === 0) return "Draft · nothing is applied until you press apply";
+  const parts: string[] = [];
+  if (yours > 0) parts.push(`${yours} change${yours === 1 ? "" : "s"} of yours`);
+  if (agents > 0) parts.push(`${agents} from the agent`);
+  return `Draft · ${parts.join(" · ")}`;
+}
+
 function ChangeCard({
   card,
   index,
   edited,
+  agentEdit,
   onRoute,
 }: {
   card: PlanCard;
   index: number;
   edited: boolean;
+  agentEdit: boolean;
   onRoute: (workItemId: string, resourceId: string | null) => void;
 }) {
   const scenario = useActiveScenario();
@@ -90,6 +102,9 @@ function ChangeCard({
           </div>
           <span className="flex shrink-0 items-center gap-1">
             {edited && <span className="hmi-label !text-[9px] !text-ink">your change</span>}
+            {agentEdit && !edited && (
+              <span className="hmi-label !text-[9px] !text-agent">agent change</span>
+            )}
             <span className="border border-rule-2 bg-sheet px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-ink-2">
               {card.timeLabel}
             </span>
@@ -132,6 +147,7 @@ export function ProposalCard({ onRoute, onApply, onLater }: ProposalCardProps = 
   // retargeted a card, and Apply must run exactly what is on screen.
   const plan = useDraftPlan();
   const humanEdited = useHumanEdited();
+  const agentEdited = useAgentEdited();
   const scenario = useActiveScenario();
   const best = useExploration().best;
   const [collapsed, setCollapsed] = useState(false);
@@ -169,11 +185,7 @@ export function ProposalCard({ onRoute, onApply, onLater }: ProposalCardProps = 
       tone="agent"
       meta={headline}
       label="Proposed plan"
-      footer={
-        edits === 0
-          ? "Draft · nothing is applied until you press apply"
-          : `Draft · ${edits} change${edits === 1 ? "" : "s"} of yours`
-      }
+      footer={draftFooter(edits, agentEdited.length)}
     >
       <ul className="flex flex-col gap-2 px-3 py-3">
         {cards.map((card, index) => (
@@ -182,6 +194,7 @@ export function ProposalCard({ onRoute, onApply, onLater }: ProposalCardProps = 
             card={card}
             index={index}
             edited={card.workItemId !== null && humanEdited.includes(card.workItemId)}
+            agentEdit={card.workItemId !== null && agentEdited.includes(card.workItemId)}
             onRoute={route}
           />
         ))}

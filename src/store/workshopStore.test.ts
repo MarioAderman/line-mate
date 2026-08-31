@@ -15,7 +15,90 @@ beforeEach(() => {
     popover: null,
     draft: null,
     humanEdited: [],
+    agentEdited: [],
     applyError: null,
+  });
+});
+
+describe("agent edits the visible draft during the proposal", () => {
+  function reachProposal(): void {
+    expect(runCommand("explore_schedules", {}, "agent").ok).toBe(true);
+    expect(useWorkshopStore.getState().story).toBe("proposal");
+    expect(useWorkshopStore.getState().draft).not.toBeNull();
+  }
+
+  it("routes an agent retarget into the draft, not the world", () => {
+    reachProposal();
+    const state = useWorkshopStore.getState();
+    const active = state.scenarios.find((s) => s.id === state.activeScenarioId)!;
+    const worldRouteBefore = structuredClone(
+      active.workItems.find((w) => w.id === "veh-05")!.route,
+    );
+
+    const result = runCommand(
+      "route_work_item",
+      { workItemId: "veh-05", resourceId: "bay-2" },
+      "agent",
+    );
+    expect(result.ok).toBe(true);
+    expect((result as { data: { draftEdited?: boolean } }).data.draftEdited).toBe(true);
+
+    const after = useWorkshopStore.getState();
+    expect(after.agentEdited).toContain("veh-05");
+    expect(after.humanEdited).not.toContain("veh-05");
+    const change = after.draft!.changes.find(
+      (c) => c.command === "route_work_item" && c.workItemId === "veh-05",
+    );
+    expect(change).toMatchObject({ resourceId: "bay-2" });
+    // The world is untouched: same route as before, no new change record.
+    const activeAfter = after.scenarios.find((s) => s.id === after.activeScenarioId)!;
+    expect(activeAfter.workItems.find((w) => w.id === "veh-05")!.route).toEqual(worldRouteBefore);
+    expect(after.story).toBe("proposal");
+  });
+
+  it("keeps world semantics when the agent targets another scenario", () => {
+    reachProposal();
+    const created = runCommand(
+      "create_scenario",
+      { name: "Side branch", activate: false },
+      "agent",
+    );
+    expect(created.ok).toBe(true);
+    const branchId = (created as { data: { scenarioId: string } }).data.scenarioId;
+
+    const result = runCommand(
+      "route_work_item",
+      { workItemId: "veh-05", resourceId: "bay-2", scenarioId: branchId },
+      "agent",
+    );
+    expect(result.ok).toBe(true);
+    expect((result as { data: { draftEdited?: boolean } }).data.draftEdited).toBeUndefined();
+    expect((result as { data: { changeId?: string } }).data.changeId).toBeDefined();
+    expect(useWorkshopStore.getState().agentEdited).not.toContain("veh-05");
+  });
+
+  it("inspect_system carries the briefing and the draft with authorship", () => {
+    reachProposal();
+    useWorkshopStore.getState().routeInDraft("veh-03", "bay-1", 1);
+    expect(runCommand("route_work_item", { workItemId: "veh-05", resourceId: "bay-2" }, "agent").ok).toBe(true);
+
+    const result = runCommand("inspect_system", {}, "agent");
+    expect(result.ok).toBe(true);
+    const data = (result as {
+      data: {
+        briefing?: string;
+        draft?: { changes: Array<{ workItemId: string; editedBy: string }> };
+      };
+    }).data;
+    expect(data.briefing).toContain("branch first");
+    expect(data.draft).toBeDefined();
+    const byId = new Map(data.draft!.changes.map((c) => [`${c.workItemId}`, c.editedBy]));
+    expect(byId.get("veh-03")).toBe("human");
+    expect(byId.get("veh-05")).toBe("agent");
+    // Everything the search proposed and nobody touched keeps its origin.
+    expect(
+      data.draft!.changes.some((c) => c.editedBy === "agent-proposal"),
+    ).toBe(true);
   });
 });
 

@@ -81,6 +81,8 @@ export interface WorkshopStore extends WorkshopState {
   draft: Plan | null;
   /** Work items the human retargeted inside the draft — attribution on the card. */
   humanEdited: string[];
+  /** Work items the agent retargeted inside the draft, via WebMCP. */
+  agentEdited: string[];
   /** Why the last apply was refused — null when the plan has not been tried. */
   applyError: string | null;
 
@@ -112,6 +114,7 @@ export const RESET_VIEW = {
   popover: null,
   draft: null,
   humanEdited: [],
+  agentEdited: [],
   applyError: null,
 } satisfies Partial<WorkshopStore>;
 
@@ -136,9 +139,54 @@ export const useWorkshopStore = create<WorkshopStore>((set, get) => ({
   viewport: "laptop",
   draft: null,
   humanEdited: [],
+  agentEdited: [],
   applyError: null,
 
   run: (name, input = {}, actor: Actor = "human") => {
+    // While the proposal is on screen, an agent retarget of the active
+    // scenario edits the visible draft — the same gesture as the human's
+    // drag, attributed to the agent — and the world stays untouched until
+    // Apply. An explicit different scenarioId keeps normal world semantics.
+    if (actor === "agent" && name === "route_work_item" && get().story === "proposal") {
+      const raw = (input ?? {}) as {
+        workItemId?: string;
+        resourceId?: string | null;
+        position?: number | null;
+        scenarioId?: string;
+      };
+      const state = get();
+      const targetsActive = !raw.scenarioId || raw.scenarioId === state.activeScenarioId;
+      if (targetsActive && state.draft && raw.workItemId) {
+        const patch = draftRoutePatch(
+          state,
+          raw.workItemId,
+          raw.resourceId ?? null,
+          raw.position,
+          "agent",
+        );
+        if (patch) {
+          set(patch);
+          const result: CommandResult = {
+            ok: true,
+            command: name,
+            actor,
+            data: {
+              draftEdited: true,
+              workItemId: raw.workItemId,
+              route: {
+                resourceId: raw.resourceId ?? null,
+                position: raw.resourceId === null ? null : (raw.position ?? 1),
+              },
+              summary:
+                "Updated the proposed-plan draft on the manager's screen. " +
+                "Nothing is applied to the world until the manager presses Apply & notify team.",
+            },
+          };
+          set({ lastResult: result });
+          return result;
+        }
+      }
+    }
     const ctx: CommandContext = {
       getState: () => get(),
       // Spreading keeps the store's own actions while the command layer swaps
@@ -147,7 +195,15 @@ export const useWorkshopStore = create<WorkshopStore>((set, get) => ({
       now: () => Date.now(),
       actor,
     };
-    const result = executeCommand(ctx, name, input);
+    let result = executeCommand(ctx, name, input);
+    // The draft is view state the command layer cannot see; the agent still
+    // needs it to reason about the on-screen proposal and its authorship.
+    if (result.ok && name === "inspect_system") {
+      const draftBlock = describeDraft(get());
+      if (draftBlock) {
+        result = { ...result, data: { ...(result.data as object), draft: draftBlock } };
+      }
+    }
     const patch: Partial<WorkshopStore> = { lastResult: result };
     if (actor === "agent" && result.ok) {
       const raw = (input ?? {}) as { resourceId?: string; workItemId?: string };
@@ -175,35 +231,79 @@ export const useWorkshopStore = create<WorkshopStore>((set, get) => ({
   setViewport: (viewport) => set({ viewport }),
   setMcpStatus: (mcpStatus, toolCount) =>
     set((state) => ({ mcpStatus, mcpToolCount: toolCount ?? state.mcpToolCount })),
-  setDraft: (draft) => set({ draft, humanEdited: [], applyError: null }),
+  setDraft: (draft) => set({ draft, humanEdited: [], agentEdited: [], applyError: null }),
   setApplyError: (applyError) => set({ applyError }),
-  clearDraft: () => set({ draft: null, humanEdited: [], applyError: null }),
+  clearDraft: () => set({ draft: null, humanEdited: [], agentEdited: [], applyError: null }),
   routeInDraft: (workItemId, resourceId, position = 1) =>
-    set((state) => {
-      if (!state.draft) return state;
-      const change: PlanChange = {
-        command: "route_work_item",
-        workItemId,
-        resourceId,
-        // A released route has no queue; the schema enforces the same rule.
-        position: resourceId === null ? null : position,
-      };
-      const existing = state.draft.changes.findIndex(
-        (c) => c.command === "route_work_item" && c.workItemId === workItemId,
-      );
-      const changes =
-        existing === -1
-          ? [...state.draft.changes, change]
-          : state.draft.changes.map((c, i) => (i === existing ? change : c));
-      return {
-        draft: { ...state.draft, changes },
-        applyError: null,
-        humanEdited: state.humanEdited.includes(workItemId)
-          ? state.humanEdited
-          : [...state.humanEdited, workItemId],
-      };
-    }),
+    set((state) => draftRoutePatch(state, workItemId, resourceId, position, "human") ?? state),
 }));
+
+/**
+ * One retarget inside the draft, for either editor. Returns the store patch,
+ * or null when there is no draft to edit. Attribution lands on the matching
+ * edited-list so the card can say whose change it is.
+ */
+function draftRoutePatch(
+  state: WorkshopStore,
+  workItemId: string,
+  resourceId: string | null,
+  position: number | null | undefined,
+  editor: "human" | "agent",
+): Partial<WorkshopStore> | null {
+  if (!state.draft) return null;
+  const change: PlanChange = {
+    command: "route_work_item",
+    workItemId,
+    resourceId,
+    // A released route has no queue; the schema enforces the same rule.
+    position: resourceId === null ? null : (position ?? 1),
+  };
+  const existing = state.draft.changes.findIndex(
+    (c) => c.command === "route_work_item" && c.workItemId === workItemId,
+  );
+  const changes =
+    existing === -1
+      ? [...state.draft.changes, change]
+      : state.draft.changes.map((c, i) => (i === existing ? change : c));
+  const list = editor === "human" ? state.humanEdited : state.agentEdited;
+  const edited = list.includes(workItemId) ? list : [...list, workItemId];
+  return {
+    draft: { ...state.draft, changes },
+    applyError: null,
+    ...(editor === "human" ? { humanEdited: edited } : { agentEdited: edited }),
+  };
+}
+
+/**
+ * The on-screen draft, shaped for the agent: which choices the proposal is
+ * standing on right now and who set each one. Null outside the proposal beat.
+ */
+function describeDraft(state: WorkshopStore): Record<string, unknown> | null {
+  if (!state.draft || state.story !== "proposal") return null;
+  const best = state.exploration.best;
+  return {
+    planId: state.draft.id,
+    label: state.draft.label,
+    status:
+      "Unapplied draft on the manager's screen — it becomes real only when " +
+      "the manager presses Apply & notify team.",
+    expected: best
+      ? {
+          promisesMet: best.promisesMet,
+          promisedTotal: best.promisedTotal,
+          promisesMetRate: best.promisesMetRate,
+        }
+      : null,
+    changes: state.draft.changes.map((change) => ({
+      ...change,
+      editedBy: state.humanEdited.includes(change.workItemId)
+        ? "human"
+        : state.agentEdited.includes(change.workItemId)
+          ? "agent"
+          : "agent-proposal",
+    })),
+  };
+}
 
 /* ----------------------------------------- story lifecycle from commands */
 

@@ -223,6 +223,23 @@ const allowBaseline = z.boolean().optional();
 
 /* --------------------------------------------------------------- reads */
 
+/**
+ * The mission statement an agent reads before anything else. WebMCP has no
+ * page-level instructions channel, so the briefing rides on the tool the
+ * descriptions already point at first.
+ */
+const AGENT_BRIEFING =
+  "You are working a mid-market auto repair shop alongside its human manager, " +
+  "on the same live world the manager is watching. Today's goal: keep every " +
+  "customer promise before closing. Levers you can pull: job priorities, bay " +
+  "pins and queue positions, releasing pins, branching scenarios, running the " +
+  "deterministic simulation, and exploring alternative schedules with " +
+  "measured confidence. Hard limits: no overtime, no extra technicians, no " +
+  "cancellations, and the baseline scenario is protected — branch first. The " +
+  "whole shop is a simulated demo world inside this page; notes and " +
+  "notifications never leave the browser. Propose ideas freely: every change " +
+  "is attributed and the manager can always see, edit, or refuse it.";
+
 const inspectSystem: CommandDefinition = {
   name: "inspect_system",
   kind: "read",
@@ -230,7 +247,9 @@ const inspectSystem: CommandDefinition = {
   description:
     "Overview of the active scenario: shift clock, constraints, bays and " +
     "technicians, waiting jobs with their promises, the latest simulation " +
-    "KPIs, and recent human/agent changes. Use this first.",
+    "KPIs, and recent human/agent changes. Includes a briefing on the room " +
+    "you have to act, and — while a proposal is on the manager's screen — " +
+    "the current draft with who set each choice. Use this first.",
   input: z.object({ scenarioId: scenarioRef }),
   run: (ctx, raw) => {
     const { scenarioId } = raw as { scenarioId?: string };
@@ -238,6 +257,7 @@ const inspectSystem: CommandDefinition = {
     const scenario = resolveScenario(state, scenarioId);
     const sim = state.simulations[scenario.id];
     return {
+      briefing: AGENT_BRIEFING,
       scenario: {
         ...scenarioSummary(state, scenario),
         description: scenario.description,
@@ -644,7 +664,10 @@ const routeWorkItem: CommandDefinition = {
   description:
     "Send a job to a specific bay or station, optionally at a queue position " +
     "(1 = next). resourceId null clears the pin so the job takes any eligible " +
-    "bay. The target must be able to run at least one of the job's steps.",
+    "bay. The target must be able to run at least one of the job's steps. " +
+    "While a proposed plan is on the manager's screen for the active " +
+    "scenario, this edits that visible draft instead — attributed to you, " +
+    "and nothing lands in the world until the manager applies the plan.",
   input: z.object({
     workItemId: z.string().min(1),
     resourceId: z.string().min(1).nullable(),
@@ -991,8 +1014,9 @@ const postShiftNote: CommandDefinition = {
   title: "Post shift note",
   description:
     "Tell the team what changed. Stores a shift note against the scenario " +
-    "with the channels it would go out on (slack, email, sms). Simulated " +
-    "inside the page for the demo: no message is actually sent anywhere.",
+    "with the channels it would go out on (slack, email, sms). Entirely " +
+    "simulated inside this demo page: nothing is sent to real Slack, email, " +
+    "SMS, or any external service, and no data leaves the browser.",
   input: z.object({
     scenarioId: scenarioRef,
     text: z.string().min(1).max(400),
@@ -1062,7 +1086,9 @@ const exploreSchedulesCommand: CommandDefinition = {
     "pins) and scores each one across seeded replications of the day, so the " +
     "answer carries how often it holds, not just one lucky run. Deterministic: " +
     "the same seed always returns the same ranking. Returns the best plan and " +
-    "up to eight runners-up, ready to hand to apply_plan.",
+    "up to eight runners-up, ready to hand to apply_plan. The manager's " +
+    "screen animates this search live for about ten seconds — you can " +
+    "narrate over it instead of describing it afterwards.",
   input: z.object({
     scenarioId: scenarioRef,
     seed: z.number().int().min(0).max(0xffffffff).optional(),
