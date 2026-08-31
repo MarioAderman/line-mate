@@ -14,6 +14,8 @@ import type { Lane as LaneModel, LaneBlock } from "@/components/derive";
 import { usePopoverAnchor } from "@/components/frame";
 import { Vehicle } from "@/components/vehicles";
 import { BLOCK_HEIGHT, LABEL_WIDTH, windowPercent } from "./scale";
+import { readWorkItemDrag } from "@/components/story/dragDrop";
+import { routeFromDrop } from "@/store/storySlice";
 
 interface Props {
   lane: LaneModel;
@@ -141,7 +143,18 @@ export function Lane({ lane, type, clock, trackWidth, last }: Props) {
         <span className="text-[0.82rem] font-semibold leading-tight text-ink">{lane.name}</span>
         <span className="hmi-label text-[0.52rem]">{type === "station" ? "Station" : "Bay"}</span>
       </button>
-      <div className="relative min-w-0">
+      <div
+        className="relative min-w-0"
+        onDragOver={(e) => {
+          if (e.dataTransfer.types.includes("application/x-workshop-work-item")) e.preventDefault();
+        }}
+        onDrop={(e) => {
+          const payload = readWorkItemDrag(e.dataTransfer);
+          if (!payload) return;
+          e.preventDefault();
+          routeFromDrop(payload.workItemId, lane.resourceId, 1);
+        }}
+      >
         <BlockedWindow lane={lane} clock={clock} />
         {lane.blocks.map((block) => (
           <Block key={`${block.workItemId}:${block.start}`} block={block} clock={clock} trackWidth={trackWidth} />

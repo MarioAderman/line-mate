@@ -14,6 +14,8 @@ import { AlertCard } from "./AlertCard";
 import { Header } from "./Header";
 import { LiveStrip } from "./LiveStrip";
 import { Popover } from "./Popover";
+import { DemoControls } from "@/components/story/DemoControls";
+import { StoryLayer } from "@/components/story/StoryLayer";
 import { PromisesStrip } from "./PromisesStrip";
 import { TitleBlock } from "./TitleBlock";
 
@@ -51,10 +53,12 @@ export function Shell({ board, floor }: Props) {
           {view === "board" ? board : floor}
           <AlertCard />
           <TitleBlock />
+          <StoryLayer />
         </div>
         <LiveStrip />
       </div>
       <Popover />
+      <DemoControls />
     </div>
   );
 }

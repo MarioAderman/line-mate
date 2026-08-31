@@ -1,4 +1,5 @@
 import { ShiftBoard } from "@/components/board";
+import { FloorSlot } from "@/components/floor";
 import { Shell } from "@/components/frame";
 import { WebMcpBridge } from "@/webmcp";
 
@@ -13,11 +14,7 @@ export default function Home() {
       <WebMcpBridge />
       <Shell
         board={<ShiftBoard />}
-        floor={
-          <div data-slot="floor" className="flex h-full items-center justify-center">
-            <p className="hmi-label">Isometric shop — in build</p>
-          </div>
-        }
+        floor={<FloorSlot />}
       />
     </>
   );

@@ -11,6 +11,8 @@ import { floorAt, vehicleKind, type FloorView } from "@/components/derive";
 import { partName, usePopoverAnchor } from "@/components/frame";
 import { Vehicle } from "@/components/vehicles";
 import { FLOOR_STRIP_HEIGHT } from "./scale";
+import { readWorkItemDrag } from "@/components/story/dragDrop";
+import { routeFromDrop } from "@/store/storySlice";
 
 const STATUS_TONE: Record<string, { border: string; label: string }> = {
   working: { border: "border-rule-2", label: "text-ink-2" },
@@ -39,6 +41,15 @@ function ResourceCell({
     <button
       type="button"
       {...anchor}
+      onDragOver={(e) => {
+        if (e.dataTransfer.types.includes("application/x-workshop-work-item")) e.preventDefault();
+      }}
+      onDrop={(e) => {
+        const payload = readWorkItemDrag(e.dataTransfer);
+        if (!payload) return;
+        e.preventDefault();
+        routeFromDrop(payload.workItemId, resourceId, 1);
+      }}
       aria-label={`${resource.name}: ${bay.statusLabel}${current ? `, ${current.workItem.vehicle}` : ""}`}
       className={`flex h-full min-w-0 flex-col justify-between rounded-sheet border bg-sheet px-2 py-1.5 text-left ${tone.border}`}
     >

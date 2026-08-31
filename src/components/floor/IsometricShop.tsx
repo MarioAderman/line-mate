@@ -23,6 +23,9 @@ import {
 } from "@/components/derive";
 import type { SimulationResult } from "@/simulation";
 import { useActiveScenario, useActiveSimulation, useWorkshopStore } from "@/store";
+import { readWorkItemDrag } from "@/components/story/dragDrop";
+import { routeFromDrop } from "@/store/storySlice";
+import { planFromCandidate } from "@/simulation";
 import {
   DIAGNOSTICS,
   EXIT,
@@ -91,11 +94,8 @@ const OUTBOUND = {
   to: { a: 11.0, b: 3.6 },
 };
 
-/** The two cars the agent's plan re-routes; the bay is read from the world. */
-const PLAN_ROUTES: Array<{ workItemId: string; fallbackResourceId: string }> = [
-  { workItemId: "veh-03", fallbackResourceId: "bay-3" },
-  { workItemId: "veh-05", fallbackResourceId: "bay-2" },
-];
+/* Route artwork derives from the canonical plan on screen (finding 5): the
+ * draft during beats 4–5, else the measured winner — never a hardcoded list. */
 
 /* ------------------------------------------------------------------ props */
 
@@ -111,6 +111,8 @@ export function IsometricShop({ width, height, className }: IsometricShopProps) 
   const simulation = useActiveSimulation();
   const playbackMinute = useWorkshopStore((s) => s.playbackMinute);
   const story = useWorkshopStore((s) => s.story);
+  const draft = useWorkshopStore((s) => s.draft);
+  const exploration = useWorkshopStore((s) => s.exploration);
   const selection = useWorkshopStore((s) => s.selection);
   const agentAttention = useWorkshopStore((s) => s.agentAttention);
   const setPopover = useWorkshopStore((s) => s.setPopover);
@@ -142,6 +144,20 @@ export function IsometricShop({ width, height, className }: IsometricShopProps) 
     focused: focused === key,
     highlighted: highlighted.has(`${target.kind}:${target.id}`),
     handlers: {
+      // Lifts and the station accept a dragged plan card / vehicle: the shared
+      // drag contract routes through the one entry point (draft in beat 4,
+      // world command otherwise).
+      ...(target.kind === "resource"
+        ? {
+            onDragOver: (e: React.DragEvent) => e.preventDefault(),
+            onDrop: (e: React.DragEvent) => {
+              const payload = readWorkItemDrag(e.dataTransfer);
+              if (!payload) return;
+              e.preventDefault();
+              routeFromDrop(payload.workItemId, target.id, 1);
+            },
+          }
+        : {}),
       onPointerEnter: (e: React.PointerEvent) => setPopover({ target, x: e.clientX, y: e.clientY }),
       onPointerLeave: () => setPopover(null),
       onClick: (e: React.MouseEvent) => setPopover({ target, x: e.clientX, y: e.clientY }),
@@ -375,22 +391,45 @@ export function IsometricShop({ width, height, className }: IsometricShopProps) 
 
   /* ------------------------------------------------------------- the routes */
 
-  const planRoutes = scene.showPlan
-    ? PLAN_ROUTES.map(({ workItemId, fallbackResourceId }) => {
-        const item = scenario.workItems.find((w) => w.id === workItemId);
-        if (!item) return null;
-        const resourceId = planTarget(item, simulation) ?? fallbackResourceId;
-        const zone = LIFTS.find((l) => l.resourceId === resourceId);
-        if (!zone) return null;
-        const from = placements.get(item.id) ?? LOT_GATE;
-        return {
-          id: item.id,
-          bodyKind: isoBodyKind(item.vehicle, vehicleKind(item.vehicle)),
-          from,
-          to: liftEntry(zone),
-          label: `${item.vehicle} to ${resourceId.replace("bay-", "Bay ")}`,
-        };
-      }).filter(Boolean)
+  const shownPlan =
+    draft ?? (exploration.best ? planFromCandidate(exploration.best) : null);
+  const planRoutes = scene.showPlan && shownPlan
+    ? shownPlan.changes
+        .filter((c) => c.command === "route_work_item")
+        .map((change) => {
+          const item = scenario.workItems.find((w) => w.id === change.workItemId);
+          if (!item) return null;
+          const bodyKind = isoBodyKind(item.vehicle, vehicleKind(item.vehicle));
+          if (change.resourceId !== null) {
+            // A pin: the car drives to the named lift.
+            const zone = LIFTS.find((l) => l.resourceId === change.resourceId);
+            if (!zone) return null;
+            const from = placements.get(item.id) ?? LOT_GATE;
+            return {
+              id: item.id,
+              bodyKind,
+              from,
+              to: liftEntry(zone),
+              label: `${item.vehicle} to ${change.resourceId.replace("bay-", "Bay ")}`,
+            };
+          }
+          // A release: only meaningful as artwork when the car is standing on a
+          // lift — it rolls off along the outbound lane.
+          const standing = LIFTS.find((zone) => {
+            const view = floor.bays[zone.resourceId];
+            const car = view?.current?.workItem ?? nextInBay(view?.queued);
+            return car?.id === item.id;
+          });
+          if (!standing) return null;
+          return {
+            id: item.id,
+            bodyKind,
+            from: liftEntry(standing),
+            to: OUTBOUND.to,
+            label: `${item.vehicle} rolls off ${standing.resourceId.replace("bay-", "Bay ")}`,
+          };
+        })
+        .filter(Boolean)
     : [];
 
   return (
@@ -525,16 +564,6 @@ function holdsPart(resource: Resource, minute: number): boolean {
   return resource.blockedUntilMinute !== null && resource.blockedUntilMinute > minute;
 }
 
-function planTarget(item: WorkItem, simulation: SimulationResult | null): string | null {
-  if (item.route.resourceId && LIFTS.some((l) => l.resourceId === item.route.resourceId)) {
-    return item.route.resourceId;
-  }
-  const segment = simulation?.segments.find(
-    (s) => s.workItemId === item.id && LIFTS.some((l) => l.resourceId === s.resourceId),
-  );
-  return segment?.resourceId ?? null;
-}
-
 /**
  * A car is red when its promise is projected to be missed and amber while the
  * lift it stands on is blocked. `blocked` comes from the resource, not from
@@ -598,7 +627,16 @@ function Hotspot({ label, outline, focused, highlighted, handlers, children }: H
       tabIndex={0}
       role="button"
       aria-label={label}
-      style={{ cursor: "pointer", outline: "none" }}
+      style={{
+        cursor: "pointer",
+        outline: "none",
+        // Finding 5 (I1): every hotspot shows keyboard focus. Shapes without a
+        // zone outline (cars, technicians, the parts van) glow instead — a
+        // geometry-free indicator that works on any SVG body.
+        filter: focused
+          ? "drop-shadow(0 0 2px var(--agent)) drop-shadow(0 0 5px var(--agent))"
+          : undefined,
+      }}
       {...handlers}
     >
       {children}
