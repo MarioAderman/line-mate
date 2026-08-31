@@ -91,5 +91,8 @@ npm run verify     # typecheck + lint + tests + build — the quality gate
 npm test
 ```
 
-The product name is intentionally provisional. Built with Claude Code and Codex working in
-parallel sessions; see `CLAUDE.md` and `docs/` for the working agreements.
+Each `src/` subdirectory carries its own README, and `docs/` holds the architecture,
+simulation-model, WebMCP tool contract, design-system, and demo-scenario references.
+
+Built for the 2026 WebMCP Challenge by Mario Aderman with Claude Code and Codex working as
+parallel agent sessions on the same repository.

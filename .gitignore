@@ -48,3 +48,10 @@ next-env.d.ts
 
 # Personal planning transcript stays local
 /dev/active/foundation/source-conversation-transcript.md
+
+# Process documentation stays local: the public repo is the product
+/dev/
+/.claude/
+/CLAUDE.md
+/AGENTS.md
+/docs/coordination.md
