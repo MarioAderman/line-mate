@@ -73,7 +73,10 @@ export const DIAGNOSTICS: LiftZone = {
 };
 
 /** Waiting lot, front-left. */
-export const LOT: IsoZone = { a0: 0.25, a1: 4.45, b0: 5.85, b1: 10.95 };
+export const LOT: IsoZone = { a0: 0.25, a1: 6.85, b0: 5.85, b1: 10.95 };
+
+/** Marked customer-drop spot in front of the diagnostics pad. */
+export const DIAG_QUEUE: IsoZone = { a0: 7.7, a1: 9.4, b0: 9.35, b1: 10.45 };
 
 /** Exit strip on the right edge; cars leave towards b = 0. */
 export const EXIT: IsoZone = { a0: 10.5, a1: 13.0, b0: 0.3, b1: 5.3 };
@@ -82,10 +85,14 @@ export const EXIT: IsoZone = { a0: 10.5, a1: 13.0, b0: 0.3, b1: 5.3 };
 export const PARTS_APRON: IsoZone = { a0: 13.25, a1: 14.75, b0: 1.7, b1: 5.5 };
 export const PARTS_VAN = { a: 13.95, b: 3.6 };
 
-/** Eight marked bays in the waiting lot, back row first. */
-export const LOT_SLOTS: Array<{ a: number; b: number }> = [1.2, 3.5].flatMap((a) =>
-  [6.6, 7.85, 9.1, 10.35].map((b) => ({ a, b })),
-);
+/** Marked bays in the waiting lot, back row first. The third column keeps the
+ * front-centre apron from reading empty and only fills on overflow days; its
+ * bays stay clear of the lot gate corridor around b = 7.2. */
+export const LOT_SLOTS: Array<{ a: number; b: number }> = [
+  ...[1.2, 3.5].flatMap((a) => [6.6, 7.85, 9.1, 10.35].map((b) => ({ a, b }))),
+  { a: 5.7, b: 9.1 },
+  { a: 5.7, b: 10.35 },
+];
 
 /** Three marked positions in the exit strip, nearest the door first. */
 export const EXIT_SLOTS: Array<{ a: number; b: number }> = [1.2, 2.8, 4.4].map((b) => ({

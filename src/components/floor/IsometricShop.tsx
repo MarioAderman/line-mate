@@ -34,6 +34,7 @@ import {
   LIFT_LABEL_Z,
   LOT,
   LOT_GATE,
+  DIAG_QUEUE,
   LOT_SLOTS,
   PARTS_APRON,
   PARTS_VAN,
@@ -746,6 +747,13 @@ function Pads({ frame, exitHatchId }: { frame: IsoFrame; exitHatchId: string }) 
         fill="var(--sheet)"
         stroke="var(--ink-3)"
         strokeWidth={1.1}
+      />
+      <path
+        d={frame.quad(DIAG_QUEUE)}
+        fill="var(--paper)"
+        stroke="var(--rule)"
+        strokeWidth={0.9}
+        strokeDasharray="4 4"
       />
     </g>
   );
