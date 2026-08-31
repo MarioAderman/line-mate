@@ -55,7 +55,7 @@ export function VehicleGlyph({
   return (
     <g transform={`translate(${x} ${y}) scale(${scale})`}>
       <path d={bodyPath(kind, w, h)} fill={fill} stroke={stroke} strokeWidth={1.6} strokeLinejoin="round" />
-      <path d={windowPath(kind, w, h)} fill="none" stroke={stroke} strokeWidth={1.1} opacity={0.7} />
+      <path d={windowPath(kind, w)} fill="none" stroke={stroke} strokeWidth={1.1} opacity={0.7} />
       {wheelCenters(w, h).map(([cx, cy]) => (
         <g key={cx}>
           <circle cx={cx} cy={cy} r={6} fill={fill} stroke={stroke} strokeWidth={1.6} />

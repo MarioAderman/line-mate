@@ -26,7 +26,7 @@ export function bodyPath(kind: VehicleKind, w = GLYPH_BOX.width, h = GLYPH_BOX.h
 }
 
 /** Window outline(s), lighter stroke. */
-export function windowPath(kind: VehicleKind, w = GLYPH_BOX.width, h = GLYPH_BOX.height): string {
+export function windowPath(kind: VehicleKind, w = GLYPH_BOX.width): string {
   const r = (v: number) => v.toFixed(0);
   if (kind === "van") {
     return `M${r(w * 0.66)} 7 h${r(w * 0.16)} v9 h-${r(w * 0.16)} z M8 7 h${r(w * 0.5)} v9 H8 z`;
@@ -68,7 +68,7 @@ export function vehicleGlyphMarkup(
     .join("");
   return (
     `<path d="${bodyPath(kind, w, h)}" fill="${fill}" stroke="${style.stroke}" stroke-width="${sw}" stroke-linejoin="round"/>` +
-    `<path d="${windowPath(kind, w, h)}" fill="none" stroke="${style.stroke}" stroke-width="1.1" opacity="0.7"/>` +
+    `<path d="${windowPath(kind, w)}" fill="none" stroke="${style.stroke}" stroke-width="1.1" opacity="0.7"/>` +
     wheels
   );
 }
