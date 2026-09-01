@@ -50,6 +50,34 @@ to agents. Tool responses are structured, validated with zod, and bounded. Durin
 beat, an agent `route_work_item` on the draft's scenario edits the visible draft — dropdown moves,
 `agent change` badge — and the world stays untouched until the manager applies.
 
+### Registration (the imperative API, exactly)
+
+Every tool is registered through the WebMCP imperative API on `document.modelContext`, each with
+`name`, `description`, `inputSchema` (JSON Schema generated from the zod command schema), and an
+async `execute` — plus `title` and `annotations.readOnlyHint`:
+
+```ts
+// src/webmcp/adapter.ts — feature-detected, torn down with an AbortController
+await document.modelContext.registerTool(
+  { name, title, description, inputSchema, annotations, execute },
+  { signal },
+);
+```
+
+The deprecated `navigator.modelContext` spelling is deliberately not used. When no WebMCP host is
+present the app degrades to a no-op and the header pill reads `Agent bridge unavailable`; with a
+host it reads **`Agent linked · 13 tools`**.
+
+### Tested with real agents
+
+Four recorded live sessions drove these tools from **Codex realtime voice threads in the ChatGPT
+desktop app's in-app browser** (WebMCP on by default there). In the recorded transcripts the
+agent, unprompted about our internals: inspected the escalated shop, ran the seeded exploration
+(the winning plan kept **6/6 promises in 100% of measured runs** across independent seeds),
+branched scenarios to protect the baseline, applied the plan, verified it by simulation, edited
+the on-screen proposal draft through `route_work_item`, and posted the shift note — every change
+attributed `agent` in the visible history.
+
 ## Try it
 
 ```bash
@@ -64,6 +92,19 @@ npm run dev        # http://localhost:3000
   browser / Codex, or Chrome with `chrome://flags/#enable-webmcp-testing` (DevTools gains a WebMCP
   panel to inspect and invoke the tools directly). The header pill shows `Agent linked · 13 tools`
   when the bridge is up.
+
+### Judge test script (2 minutes, live URL)
+
+1. Open **https://line-mate.vercel.app** in the ChatGPT desktop app's in-app browser, or in
+   Chrome 149+ with `chrome://flags/#enable-webmcp-testing` enabled (then restart Chrome).
+2. Dismiss the cover (**Let's get started** or `Enter`) and confirm the header pill says
+   **`Agent linked · 13 tools`**.
+3. Press **`Shift+E`** — the part delay lands: Bay 3 blocked, 4/6 promises at risk.
+4. Ask the agent: *"Inspect the shop and recover today's promises — explore schedules, branch a
+   scenario, apply the best plan, and verify it."* Watch the search animate on screen (~10 s),
+   the proposal land with attributed cards, and the recovery reach **6/6**.
+5. No agent handy? Chrome DevTools' **WebMCP panel** lists all 13 tools and can invoke them
+   directly — `inspect_system` first. No login, no credentials, nothing to install.
 
 ## Architecture
 
