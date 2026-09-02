@@ -8,12 +8,13 @@
  * render correctly.
  */
 import { useCallback, useRef, useState, type RefCallback } from "react";
-import type { Clock } from "@/domain";
+import type { Clock, WorkItem } from "@/domain";
+import type { Segment, SimulationResult } from "@/simulation";
 
 /** Fixed geometry of the Board, in px. */
 export const LABEL_WIDTH = 118;
 export const AXIS_HEIGHT = 44;
-export const FLOOR_STRIP_HEIGHT = 88;
+export const FLOOR_STRIP_HEIGHT = 104;
 
 /** A block fills most of its lane, within drafting-sensible bounds. */
 export const BLOCK_HEIGHT = { height: "56%", minHeight: 44, maxHeight: 66 } as const;
@@ -60,4 +61,65 @@ export function useElementWidth<T extends HTMLElement>(): [RefCallback<T>, numbe
   }, []);
 
   return [ref, width];
+}
+
+/* ------------------------------------------------- time that can be seen */
+
+/**
+ * Progress through a [start, end) window at `minute`, clamped to 0..1.
+ * The single "now" is `store.playbackMinute`; nothing here keeps its own clock.
+ */
+export function windowProgress(start: number, end: number, minute: number): number {
+  const span = end - start;
+  if (span <= 0) return minute >= end ? 1 : 0;
+  return Math.min(1, Math.max(0, (minute - start) / span));
+}
+
+/** Whole minutes from `minute` until `target`, never negative. */
+export function minutesUntil(target: number, minute: number): number {
+  return Math.max(0, Math.round(target - minute));
+}
+
+/** Minutes a job has been running, clamped to the window. */
+export function minutesElapsed(start: number, end: number, minute: number): number {
+  return Math.min(Math.round(end - start), Math.max(0, Math.round(minute - start)));
+}
+
+/**
+ * The caption above a progress bar: "26 / 45 min" while there is a way to go,
+ * "4 min left" in the last stretch, "done" once the window has closed.
+ */
+export function progressLabel(start: number, end: number, minute: number): string {
+  const total = Math.round(end - start);
+  const remaining = minutesUntil(end, minute);
+  if (remaining === 0) return "done";
+  if (remaining <= 5) return `${remaining} min left`;
+  return `${minutesElapsed(start, end, minute)} / ${total} min`;
+}
+
+/** The segment occupying a resource at `minute`, straight from the engine. */
+export function liveSegment(
+  result: SimulationResult | null,
+  resourceId: string,
+  minute: number,
+): Segment | null {
+  if (!result) return null;
+  return (
+    result.segments.find((s) => s.resourceId === resourceId && s.start <= minute && s.end > minute) ??
+    null
+  );
+}
+
+/**
+ * The queue of a bay in the order the commands read it: pinned position first,
+ * then priority, then id. The numbers on the chips are these positions, and
+ * dropping on chip N asks for exactly that position.
+ */
+export function queueOrder(items: WorkItem[]): WorkItem[] {
+  return [...items].sort(
+    (a, b) =>
+      (a.route.position ?? 99) - (b.route.position ?? 99) ||
+      a.priority - b.priority ||
+      (a.id < b.id ? -1 : 1),
+  );
 }
