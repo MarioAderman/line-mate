@@ -39,8 +39,12 @@ export const PLATFORM_Z = 0.58;
 export const POST_Z = PLATFORM_Z + 0.66;
 /** The highest thing drawn: the leader tick and name plate over a lift. */
 export const LIFT_LABEL_Z = PLATFORM_Z + 1.15;
-/** Room a two-line name plate needs above its anchor. */
-const LABEL_TEXT_PX = 24;
+/**
+ * Room the name plate needs above its anchor: name, status, job caption and
+ * the progress bar. The bar sits across the anchor, so this is the ascender
+ * of the three text rows plus a little air.
+ */
+const LABEL_TEXT_PX = 54;
 
 /**
  * How steep the projection is (`halfW / halfH`). Letting it flex inside this
@@ -134,6 +138,8 @@ export interface IsoFrame {
   /** Pixels per plan unit of height. */
   zUnit: number;
   project(a: number, b: number, z?: number): IsoPoint;
+  /** Inverse of `project` at a known height: screen pixels back to plan units. */
+  unproject(x: number, y: number, z?: number): { a: number; b: number };
   /** Closed path for a plan rectangle lying at height `z`. */
   quad(zone: IsoZone, z?: number): string;
   /** Closed path for a vertical face between two plan points. */
@@ -171,6 +177,17 @@ export function createIsoFrame(width: number, height: number): IsoFrame {
     y: oy + (a + b) * halfH - z * zUnit,
   });
 
+  /**
+   * The projection is linear, so it inverts exactly: `a - b` falls out of the
+   * horizontal offset and `a + b` out of the vertical one. This is how a
+   * pointer over the drawing becomes a place on the shop floor.
+   */
+  const unproject = (x: number, y: number, z = 0): { a: number; b: number } => {
+    const difference = (x - ox) / halfW;
+    const sum = (y - oy + z * zUnit) / halfH;
+    return { a: (sum + difference) / 2, b: (sum - difference) / 2 };
+  };
+
   const quad = (zone: IsoZone, z = 0): string => {
     const p = [
       project(zone.a0, zone.b0, z),
@@ -198,6 +215,7 @@ export function createIsoFrame(width: number, height: number): IsoFrame {
     halfH,
     zUnit,
     project,
+    unproject,
     quad,
     face,
     depth: (a, b) => a + b,
@@ -216,6 +234,11 @@ export function pointsToPath(points: IsoPoint[], close = true): string {
 
 export function zoneCentre(zone: IsoZone): { a: number; b: number } {
   return { a: (zone.a0 + zone.a1) / 2, b: (zone.b0 + zone.b1) / 2 };
+}
+
+/** Is this plan point standing on that footprint? */
+export function zoneContains(zone: IsoZone, point: { a: number; b: number }): boolean {
+  return point.a >= zone.a0 && point.a <= zone.a1 && point.b >= zone.b0 && point.b <= zone.b1;
 }
 
 export function inflate(zone: IsoZone, amount: number): IsoZone {
