@@ -173,9 +173,9 @@ function Actions({ inspection, minute }: { inspection: Inspection; minute: numbe
   const question = askAgentQuestion(inspection, scenario, minute);
 
   const isJob = inspection.kind === "workItem";
-  // In beat 4 a routing decision belongs to the draft, and `routeFromDrop`
-  // puts it there. There is no draft equivalent for a priority bump, so rather
-  // than quietly edit the protected baseline the button steps aside.
+  // In beat 4 every decision belongs to the draft: routing goes through
+  // `routeFromDrop`, a priority bump through `bumpPriorityInDraft`. Neither
+  // touches the protected baseline until the manager applies.
   const drafting = story === "proposal";
   const topPriority = isJob && inspection.priority === 1;
 
@@ -270,21 +270,25 @@ function Actions({ inspection, minute }: { inspection: Inspection; minute: numbe
           <button
             type="button"
             className="hmi-button hmi-button--primary !px-2 !py-1 !text-[0.6rem]"
-            disabled={topPriority || drafting}
+            disabled={topPriority}
             title={
               topPriority
                 ? "Already first in line"
                 : drafting
-                  ? "The plan is still a draft — apply it first"
+                  ? "Move it first in the draft — nothing lands until you apply"
                   : "Move this job up the queue"
             }
-            onClick={() =>
+            onClick={() => {
+              if (drafting) {
+                useWorkshopStore.getState().bumpPriorityInDraft(inspection.id);
+                return;
+              }
               run(
                 "update_work_item",
                 { workItemId: inspection.id, changes: { priority: Math.max(1, inspection.priority - 1) } },
                 "human",
-              )
-            }
+              );
+            }}
           >
             Priority ↑
           </button>
