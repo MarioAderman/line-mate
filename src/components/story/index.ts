@@ -1,5 +1,6 @@
 export * from "./dragDrop";
 export * from "./exploration";
+export * from "./inspect";
 export * from "./planCards";
 export * from "./DemoControls";
 export * from "./ProposalCard";
@@ -7,3 +8,4 @@ export * from "./ResolvedCard";
 export * from "./ScenariosPanel";
 export * from "./StoryLayer";
 export * from "./StoryPanel";
+export * from "./Toast";

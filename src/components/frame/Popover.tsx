@@ -1,14 +1,16 @@
 "use client";
 
 /**
- * The one ephemeral popover.
+ * The one ephemeral hint — and the mount point of the inspector.
  *
- * Anything on the frame or on a view can become an anchor with
- * `usePopoverAnchor(selection)`; the store holds a single `popover` entry, so
- * only one detail is ever open. It is informational and therefore
- * `pointer-events: none` — hovering it can never keep it alive by accident.
- * It opens on hover, click and keyboard focus, and leaves on pointer-out,
- * blur or Escape.
+ * Two layers, one gesture each. **Hover or focus** gives this hint: what the
+ * thing is and the single fact that matters, `pointer-events: none` so it can
+ * never be hovered into staying. **Click is the commitment**: it opens the
+ * `Inspector`, which is anchored, interactive, and stays until dismissed.
+ *
+ * Anything on the frame or on a view becomes both by spreading
+ * `usePopoverAnchor(selection)` — no view stream has to know the difference.
+ * The hint steps aside for whatever the inspector is already showing.
  */
 import { useCallback, useEffect, useMemo, type FocusEvent, type MouseEvent, type PointerEvent } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
@@ -18,6 +20,7 @@ import type { SimulationResult } from "@/simulation";
 import { floorAt, vehicleKind, workMinutes } from "@/components/derive";
 import { Vehicle } from "@/components/vehicles";
 import { POPOVER_ESTIMATED_HEIGHT, POPOVER_GAP, POPOVER_ID, POPOVER_WIDTH } from "./metrics";
+import { Inspector, openInspector } from "./Inspector";
 
 type Tone = "ink" | "alarm" | "warn" | "agent";
 
@@ -53,6 +56,9 @@ export function usePopoverAnchor(target: Selection) {
   const active = useWorkshopStore(
     (s) => s.popover !== null && s.popover.target.kind === kind && s.popover.target.id === id,
   );
+  const inspected = useWorkshopStore(
+    (s) => s.selection !== null && s.selection.kind === kind && s.selection.id === id,
+  );
 
   const open = useCallback(
     (element: HTMLElement) => {
@@ -78,10 +84,16 @@ export function usePopoverAnchor(target: Selection) {
       onPointerLeave: close,
       onFocus: (event: FocusEvent<HTMLElement>) => open(event.currentTarget),
       onBlur: close,
-      onClick: (event: MouseEvent<HTMLElement>) => open(event.currentTarget),
+      // Click is the commitment: it opens the inspector, and the hint gets
+      // out of the way rather than sitting on top of it.
+      onClick: (event: MouseEvent<HTMLElement>) => {
+        openInspector({ kind, id }, event.currentTarget);
+      },
       "aria-describedby": active ? POPOVER_ID : undefined,
+      "aria-haspopup": "dialog" as const,
+      "aria-expanded": inspected,
     }),
-    [open, close, active],
+    [open, close, active, inspected, kind, id],
   );
 }
 
@@ -152,12 +164,12 @@ function workItemContent(
         value: item.dueMinute === null ? "No promise" : formatMinute(item.dueMinute),
         tone: outcome?.onTime === false ? "alarm" : "ink",
       },
+      { label: "Result", value: result, tone: outcome?.onTime === false ? "alarm" : "ink" },
       {
         label: "Work",
         value: `${workMinutes(item)} min · ${item.steps.length} step(s)`,
       },
       { label: "Route", value: routed },
-      { label: "Result", value: result, tone: outcome?.onTime === false ? "alarm" : "ink" },
     ],
   };
 }
@@ -204,10 +216,17 @@ function contentFor(
   return technicianContent(scenario, simulation, minute, target.id);
 }
 
+/**
+ * A hint is a glance, not a report: the first two facts and an invitation to
+ * click. Everything else the content builders derive is the inspector's job.
+ */
+const HINT_FACTS = 2;
+
 /* ------------------------------------------------------------ the popover */
 
 export function Popover() {
   const popover = useWorkshopStore((s) => s.popover);
+  const selection = useWorkshopStore((s) => s.selection);
   const setPopover = useWorkshopStore((s) => s.setPopover);
   const playbackMinute = useWorkshopStore((s) => s.playbackMinute);
   const scenario = useActiveScenario();
@@ -215,7 +234,14 @@ export function Popover() {
   const reduced = useReducedMotion();
 
   const minute = playbackMinute ?? scenario.clock.startMinute;
-  const content = popover ? contentFor(popover.target, scenario, simulation, minute) : null;
+  // The hint never covers what the inspector is already showing in full.
+  const shadowed =
+    popover !== null &&
+    selection !== null &&
+    selection.kind === popover.target.kind &&
+    selection.id === popover.target.id;
+  const content =
+    popover && !shadowed ? contentFor(popover.target, scenario, simulation, minute) : null;
 
   useEffect(() => {
     if (!popover) return;
@@ -238,40 +264,46 @@ export function Popover() {
     : undefined;
 
   return (
-    <AnimatePresence>
-      {popover && content && (
-        <motion.div
-          key={`${popover.target.kind}:${popover.target.id}`}
-          id={POPOVER_ID}
-          role="tooltip"
-          initial={{ opacity: 0, y: 6 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: 6 }}
-          transition={{ duration: reduced ? 0 : 0.12, ease: "easeOut" }}
-          style={{ left, top, width: POPOVER_WIDTH }}
-          className="pointer-events-none fixed z-50 rounded-sheet border border-ink bg-sheet px-3 py-2 shadow-[3px_3px_0_0_var(--rule)]"
-        >
-          <div className="flex items-center gap-2 border-b border-rule pb-1.5">
-            {content.vehicle && (
-              <Vehicle kind={vehicleKind(content.vehicle)} stroke="var(--ink)" fill="var(--sheet)" width={34} />
-            )}
-            <div className="min-w-0">
-              <p className="truncate font-mono text-[0.82rem] font-semibold text-ink">{content.title}</p>
-              <p className="hmi-label truncate text-[0.6rem]">{content.subtitle}</p>
-            </div>
-          </div>
-          <dl className="mt-1.5 space-y-1">
-            {content.facts.map((fact) => (
-              <div key={fact.label} className="flex gap-2">
-                <dt className="hmi-label w-[74px] shrink-0 pt-[1px] text-[0.58rem]">{fact.label}</dt>
-                <dd className={`min-w-0 flex-1 text-[0.72rem] leading-snug ${TONE_CLASS[fact.tone ?? "ink"]}`}>
-                  {fact.value}
-                </dd>
+    <>
+      <AnimatePresence>
+        {popover && content && (
+          <motion.div
+            key={`${popover.target.kind}:${popover.target.id}`}
+            id={POPOVER_ID}
+            role="tooltip"
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 6 }}
+            transition={{ duration: reduced ? 0 : 0.12, ease: "easeOut" }}
+            style={{ left, top, width: POPOVER_WIDTH }}
+            className="pointer-events-none fixed z-50 rounded-sheet border border-ink bg-sheet px-3 py-2 shadow-[3px_3px_0_0_var(--rule)]"
+          >
+            <div className="flex items-center gap-2 border-b border-rule pb-1.5">
+              {content.vehicle && (
+                <Vehicle kind={vehicleKind(content.vehicle)} stroke="var(--ink)" fill="var(--sheet)" width={34} />
+              )}
+              <div className="min-w-0">
+                <p className="truncate font-mono text-[0.82rem] font-semibold text-ink">{content.title}</p>
+                <p className="hmi-label truncate text-[0.6rem]">{content.subtitle}</p>
               </div>
-            ))}
-          </dl>
-        </motion.div>
-      )}
-    </AnimatePresence>
+            </div>
+            <dl className="mt-1.5 space-y-1">
+              {content.facts.slice(0, HINT_FACTS).map((fact) => (
+                <div key={fact.label} className="flex gap-2">
+                  <dt className="hmi-label w-[74px] shrink-0 pt-[1px] text-[0.58rem]">{fact.label}</dt>
+                  <dd className={`min-w-0 flex-1 text-[0.72rem] leading-snug ${TONE_CLASS[fact.tone ?? "ink"]}`}>
+                    {fact.value}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+            <p className="mt-1.5 border-t border-dashed border-rule pt-1 font-mono text-[0.55rem] text-ink-3">
+              click for detail and actions
+            </p>
+            </motion.div>
+        )}
+      </AnimatePresence>
+      <Inspector />
+    </>
   );
 }

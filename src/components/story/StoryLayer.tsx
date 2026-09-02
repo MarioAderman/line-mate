@@ -22,27 +22,32 @@ import { ProposalCard } from "./ProposalCard";
 import { ResolvedCard } from "./ResolvedCard";
 import { ScenariosPanel } from "./ScenariosPanel";
 import { StoryDragBounds } from "./StoryPanel";
+import { Toast } from "./Toast";
 
 export function StoryLayer() {
   const story = useStory();
   const view = useWorkshopStore((state) => state.view);
   const bounds = useRef<HTMLDivElement>(null);
   return (
-    <div
-      ref={bounds}
-      className={`pointer-events-none absolute inset-0 z-30 flex items-start p-4 ${
-        view === "floor" ? "justify-start" : "justify-end"
-      }`}
-      aria-live="polite"
-    >
-      <StoryDragBounds.Provider value={bounds}>
-        {/* mode="wait": the proposal collapses out before the resolved card lands. */}
-        <AnimatePresence mode="wait" initial={false}>
-          {story === "running" && <ScenariosPanel key="running" />}
-          {story === "proposal" && <ProposalCard key="proposal" />}
-          {story === "resolved" && <ResolvedCard key="resolved" />}
-        </AnimatePresence>
-      </StoryDragBounds.Provider>
-    </div>
+    <>
+      <div
+        ref={bounds}
+        className={`pointer-events-none absolute inset-0 z-30 flex items-start p-4 ${
+          view === "floor" ? "justify-start" : "justify-end"
+        }`}
+        aria-live="polite"
+      >
+        <StoryDragBounds.Provider value={bounds}>
+          {/* mode="wait": the proposal collapses out before the resolved card lands. */}
+          <AnimatePresence mode="wait" initial={false}>
+            {story === "running" && <ScenariosPanel key="running" />}
+            {story === "proposal" && <ProposalCard key="proposal" />}
+            {story === "resolved" && <ResolvedCard key="resolved" />}
+          </AnimatePresence>
+        </StoryDragBounds.Provider>
+      </div>
+      {/* Fixed to the pane, not to this column, so it clears both docks. */}
+      <Toast />
+    </>
   );
 }
