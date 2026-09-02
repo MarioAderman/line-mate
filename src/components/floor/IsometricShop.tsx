@@ -12,18 +12,28 @@
  * owns no state beyond which hotspot has keyboard focus. Colours are the S1
  * Blueprint tokens only.
  */
-import { useId, useMemo, useState, type ReactNode } from "react";
+import { useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useReducedMotion } from "motion/react";
-import { formatMinute, type Resource, type Scenario, type Selection, type WorkItem } from "@/domain";
+import {
+  formatMinute,
+  type Resource,
+  type Scenario,
+  type Selection,
+  type Technician,
+  type WorkItem,
+} from "@/domain";
 import {
   floorAt,
   promiseTone,
+  segmentsAt,
   vehicleKind,
   type FloorView,
 } from "@/components/derive";
-import type { SimulationResult } from "@/simulation";
+import type { Segment, SimulationResult } from "@/simulation";
 import { useActiveScenario, useActiveSimulation, useWorkshopStore } from "@/store";
+import { usePopoverAnchor } from "@/components/frame";
 import { readWorkItemDrag } from "@/components/story/dragDrop";
+import { eligibleResourceIds } from "@/components/story/planCards";
 import { routeFromDrop } from "@/store/storySlice";
 import { planFromCandidate } from "@/simulation";
 import {
@@ -48,6 +58,7 @@ import {
   inflate,
   liftEntry,
   zoneCentre,
+  zoneContains,
   type IsoFrame,
   type IsoPoint,
   type IsoZone,
@@ -98,6 +109,51 @@ const OUTBOUND = {
 /* Route artwork derives from the canonical plan on screen (finding 5): the
  * draft during beats 4–5, else the measured winner — never a hardcoded list. */
 
+/**
+ * A car being dragged from the lot to a lift, while the gesture is in flight.
+ *
+ * The gesture is driven by pointer events, not HTML5 drag-and-drop: Chrome
+ * does not start a native drag from an SVG element (a `draggable` <g> fires no
+ * `dragstart`, while an HTML `draggable` div beside it does). The lifts still
+ * accept a native drop, so a proposal card dragged from the story panel lands
+ * exactly as before; a car picked up off the floor takes the pointer path.
+ * Both finish in the same place — `routeFromDrop` — which is the invariant
+ * that matters: no drop reaches `route_work_item` on its own.
+ */
+interface FloorDrag {
+  workItemId: string;
+  /** Where it started, in plan units — the tail of the live route line. */
+  from: { a: number; b: number };
+  /** Lifts that can run this job's steps (`eligibleResourceIds`, not forked). */
+  eligible: string[];
+  /** Pointer in SVG coordinates; null until the gesture has moved. */
+  point: IsoPoint | null;
+  /** Eligible resource currently under the pointer, if any. */
+  over: string | null;
+}
+
+/** Bookkeeping that must not cause a render on every pointer sample. */
+interface DragGesture {
+  workItemId: string;
+  from: { a: number; b: number };
+  eligible: string[];
+  pointerId: number;
+  startX: number;
+  startY: number;
+  /** Set once the pointer has travelled far enough to mean "drag", not "click". */
+  active: boolean;
+  over: string | null;
+}
+
+/** Below this the pointer has not really moved; skip the re-render. */
+const DRAG_EPSILON = 3;
+
+/** How far the pointer must travel before a press becomes a drag. */
+const DRAG_THRESHOLD = 5;
+
+/** How a lift reads while a car is in flight. */
+type DropState = "none" | "eligible" | "over" | "ineligible";
+
 /* ------------------------------------------------------------------ props */
 
 export interface IsometricShopProps {
@@ -121,6 +177,11 @@ export function IsometricShop({ width, height, className }: IsometricShopProps) 
   const rawId = useId();
   const uid = rawId.replace(/[^a-zA-Z0-9]/g, "");
   const [focused, setFocused] = useState<string | null>(null);
+  const [drag, setDrag] = useState<FloorDrag | null>(null);
+  const gesture = useRef<DragGesture | null>(null);
+  /** A drag ends in a click event the popover should not answer. */
+  const swallowClick = useRef(false);
+  const svgRef = useRef<SVGSVGElement | null>(null);
 
   const minute = playbackMinute ?? scenario.clock.startMinute;
   const floor = useMemo(
@@ -128,10 +189,124 @@ export function IsometricShop({ width, height, className }: IsometricShopProps) 
     [scenario, simulation, minute],
   );
   const frame = useMemo(() => createIsoFrame(width, height), [width, height]);
+  /* The one "now": live segments at `playbackMinute`, straight off the last
+   * simulation's timeline. Progress bars and countdowns read only from here. */
+  const liveSegments = useMemo(() => segmentsAt(simulation, minute), [simulation, minute]);
 
   if (width <= 0 || height <= 0) return null;
 
   const scene = buildScene({ scenario, simulation, floor, minute, story });
+  const segmentFor = (resourceId: string): Segment | undefined =>
+    liveSegments.find((s) => s.resourceId === resourceId);
+
+  /** Where a lift stands while a car is in flight over the floor. */
+  const dropStateFor = (resourceId: string): DropState => {
+    if (!drag) return "none";
+    if (!drag.eligible.includes(resourceId)) return "ineligible";
+    return drag.over === resourceId ? "over" : "eligible";
+  };
+
+  const endDrag = () => {
+    gesture.current = null;
+    setDrag(null);
+  };
+
+  /**
+   * Which station the pointer is standing on. What the eye aims at is the
+   * drawn lift — posts, deck and all — so ask the document first. Falling back
+   * to the plan geometry catches the apron around a pad, where there is
+   * nothing drawn to hit but the drop still clearly means that bay.
+   */
+  const stationUnder = (client: IsoPoint, point: IsoPoint): string | null => {
+    const element = document.elementFromPoint(client.x, client.y);
+    const station = element?.closest?.("[data-station]")?.getAttribute("data-station");
+    if (station) return station;
+    for (const height of [PLATFORM_Z, 0]) {
+      const plan = frame.unproject(point.x, point.y, height);
+      const zone = [...LIFTS, DIAGNOSTICS].find((candidate) =>
+        zoneContains(inflate(candidate, 0.3), plan),
+      );
+      if (zone) return zone.resourceId;
+    }
+    return null;
+  };
+
+  /** Pointer handlers that turn a car in the lot into a routing decision. */
+  const carDragHandlers = (item: WorkItem, slot: { a: number; b: number }) => ({
+    onPointerDown: (e: React.PointerEvent<SVGGElement>) => {
+      if (e.button !== 0) return;
+      // Capture keeps the gesture on this car even when the pointer crosses
+      // another one. It throws if the pointer is already gone; the drag is
+      // still perfectly usable without it.
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        /* no capture available — fall back to plain pointer tracking */
+      }
+      gesture.current = {
+        workItemId: item.id,
+        from: slot,
+        eligible: eligibleResourceIds(scenario, item.id),
+        pointerId: e.pointerId,
+        startX: e.clientX,
+        startY: e.clientY,
+        active: false,
+        over: null,
+      };
+    },
+    onPointerMove: (e: React.PointerEvent<SVGGElement>) => {
+      const current = gesture.current;
+      if (!current || current.pointerId !== e.pointerId) return;
+      const box = svgRef.current?.getBoundingClientRect();
+      if (!box) return;
+      const point = { x: e.clientX - box.left, y: e.clientY - box.top };
+      if (!current.active) {
+        if (Math.hypot(e.clientX - current.startX, e.clientY - current.startY) < DRAG_THRESHOLD) {
+          return;
+        }
+        current.active = true;
+        setPopover(null);
+      }
+      const target = stationUnder({ x: e.clientX, y: e.clientY }, point);
+      current.over = target && current.eligible.includes(target) ? target : null;
+      const over = current.over;
+      setDrag((previous) => {
+        if (
+          previous &&
+          previous.over === over &&
+          previous.point &&
+          Math.abs(previous.point.x - point.x) < DRAG_EPSILON &&
+          Math.abs(previous.point.y - point.y) < DRAG_EPSILON
+        ) {
+          return previous;
+        }
+        return {
+          workItemId: current.workItemId,
+          from: current.from,
+          eligible: current.eligible,
+          point,
+          over,
+        };
+      });
+    },
+    onPointerUp: (e: React.PointerEvent<SVGGElement>) => {
+      const current = gesture.current;
+      gesture.current = null;
+      try {
+        if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+          e.currentTarget.releasePointerCapture(e.pointerId);
+        }
+      } catch {
+        /* the capture was never taken */
+      }
+      setDrag(null);
+      if (!current?.active) return;
+      swallowClick.current = true;
+      // The one entry point: a draft edit in beat 4, a human command otherwise.
+      if (current.over) routeFromDrop(current.workItemId, current.over, 1);
+    },
+    onPointerCancel: endDrag,
+  });
 
   const highlighted = new Set(
     [selection, agentAttention].filter(Boolean).map((s) => `${s!.kind}:${s!.id}`),
@@ -147,21 +322,50 @@ export function IsometricShop({ width, height, className }: IsometricShopProps) 
     handlers: {
       // Lifts and the station accept a dragged plan card / vehicle: the shared
       // drag contract routes through the one entry point (draft in beat 4,
-      // world command otherwise).
+      // world command otherwise). A drop is refused where the job's steps
+      // cannot run — `eligibleResourceIds` decides, here and in the artwork.
       ...(target.kind === "resource"
         ? {
-            onDragOver: (e: React.DragEvent) => e.preventDefault(),
+            "data-station": target.id,
+            onDragEnter: () =>
+              setDrag((current) =>
+                current && current.over !== target.id ? { ...current, over: target.id } : current,
+              ),
+            onDragOver: (e: React.DragEvent) => {
+              if (drag && !drag.eligible.includes(target.id)) return;
+              e.preventDefault();
+            },
+            onDragLeave: () =>
+              setDrag((current) =>
+                current && current.over === target.id ? { ...current, over: null } : current,
+              ),
             onDrop: (e: React.DragEvent) => {
               const payload = readWorkItemDrag(e.dataTransfer);
               if (!payload) return;
               e.preventDefault();
+              e.stopPropagation();
+              setDrag(null);
+              if (!eligibleResourceIds(scenario, payload.workItemId).includes(target.id)) return;
               routeFromDrop(payload.workItemId, target.id, 1);
             },
           }
         : {}),
-      onPointerEnter: (e: React.PointerEvent) => setPopover({ target, x: e.clientX, y: e.clientY }),
-      onPointerLeave: () => setPopover(null),
-      onClick: (e: React.MouseEvent) => setPopover({ target, x: e.clientX, y: e.clientY }),
+      onPointerEnter: (e: React.PointerEvent) => {
+        if (gesture.current) return;
+        setPopover({ target, x: e.clientX, y: e.clientY });
+      },
+      onPointerLeave: () => {
+        if (gesture.current) return;
+        setPopover(null);
+      },
+      onClick: (e: React.MouseEvent) => {
+        // A drag ends in a click; it is not a request for the popover.
+        if (swallowClick.current) {
+          swallowClick.current = false;
+          return;
+        }
+        setPopover({ target, x: e.clientX, y: e.clientY });
+      },
       onFocus: (e: React.FocusEvent<SVGGElement>) => {
         setFocused(key);
         const box = e.currentTarget.getBoundingClientRect();
@@ -198,6 +402,8 @@ export function IsometricShop({ width, height, className }: IsometricShopProps) 
       frame.quad(inflate(zone, 0.12)),
     );
 
+    const dropState = dropStateFor(resource.id);
+
     props.push({
       key: spot.id,
       depth: centre.a + centre.b,
@@ -209,6 +415,7 @@ export function IsometricShop({ width, height, className }: IsometricShopProps) 
             blocked={blocked}
             hatchId={`iso-hatch-warn-${uid}`}
             car={car ? vehicleFor(car, simulation, blocked) : null}
+            dropState={dropState}
           />
         </Hotspot>
       ),
@@ -220,8 +427,30 @@ export function IsometricShop({ width, height, className }: IsometricShopProps) 
         frame={frame}
         zone={zone}
         name={resource.name}
-        status={liftStatus(resource, view?.current?.endsAt ?? null, blocked, held)}
-        tone={blocked ? "warn" : view?.current ? "ink" : "muted"}
+        status={
+          dropState === "eligible" || dropState === "over"
+            ? "OPEN · DROP TO ROUTE"
+            : liftStatus(resource, view?.current?.endsAt ?? null, blocked, held, view?.queued.length ?? 0)
+        }
+        tone={
+          dropState === "eligible" || dropState === "over"
+            ? "agent"
+            : blocked
+              ? "warn"
+              : view?.current
+                ? "ink"
+                : "muted"
+        }
+        bar={liftBar({
+          segment: segmentFor(resource.id),
+          minute,
+          blocked,
+          etaMinute: resource.blockedUntilMinute,
+          shiftStart: scenario.clock.startMinute,
+        })}
+        barWidth={labelBarWidth(frame)}
+        alarmHatchId={`iso-hatch-alarm-${uid}`}
+        dimmed={dropState === "ineligible"}
       />,
     );
   }
@@ -240,6 +469,7 @@ export function IsometricShop({ width, height, className }: IsometricShopProps) 
         liftAria(resource, view?.statusLabel ?? "Idle", car, false),
         frame.quad(inflate(DIAGNOSTICS, 0.12)),
       );
+      const dropState = dropStateFor(resource.id);
       props.push({
         key: spot.id,
         depth: centre.a + centre.b,
@@ -248,6 +478,7 @@ export function IsometricShop({ width, height, className }: IsometricShopProps) 
             <Diagnostics
               frame={frame}
               car={car ? vehicleFor(car, simulation, false) : null}
+              dropState={dropState}
             />
           </Hotspot>
         ),
@@ -258,8 +489,28 @@ export function IsometricShop({ width, height, className }: IsometricShopProps) 
           frame={frame}
           zone={DIAGNOSTICS}
           name={resource.name}
-          status={view?.current ? `ENDS ${view.current.endsAt}` : "IDLE"}
-          tone={view?.current ? "ink" : "muted"}
+          status={
+            dropState === "eligible" || dropState === "over"
+              ? "OPEN · DROP TO ROUTE"
+              : liftStatus(resource, view?.current?.endsAt ?? null, false, false, view?.queued.length ?? 0)
+          }
+          tone={
+            dropState === "eligible" || dropState === "over"
+              ? "agent"
+              : view?.current
+                ? "ink"
+                : "muted"
+          }
+          bar={liftBar({
+            segment: segmentFor(resource.id),
+            minute,
+            blocked: false,
+            etaMinute: null,
+            shiftStart: scenario.clock.startMinute,
+          })}
+          barWidth={labelBarWidth(frame)}
+          alarmHatchId={`iso-hatch-alarm-${uid}`}
+          dimmed={dropState === "ineligible"}
           topZ={1.5}
           tickZ={1.0}
         />,
@@ -279,17 +530,28 @@ export function IsometricShop({ width, height, className }: IsometricShopProps) 
       carAria(item, simulation, "waiting in the lot"),
       "",
     );
+    const dragging = drag?.workItemId === item.id;
     props.push({
       key: spot.id,
       depth: slot.a + slot.b,
       node: (
-        <Hotspot {...spot}>
+        <Hotspot
+          {...spot}
+          /* A car in the lot is the human's handle on the schedule: pick it up
+           * and put it on a lift. */
+          draggable
+          handlers={{
+            ...spot.handlers,
+            ...carDragHandlers(item, slot),
+          }}
+        >
           <Car
             frame={frame}
             a={slot.a}
             b={slot.b}
             heading="a+"
             {...vehicleFor(item, simulation, false)}
+            tone={dragging ? "agent" : vehicleFor(item, simulation, false).tone}
           />
         </Hotspot>
       ),
@@ -371,19 +633,23 @@ export function IsometricShop({ width, height, className }: IsometricShopProps) 
     const post = busyAt ? TECH_POSTS[busyAt.resourceId] : undefined;
     const at = post ?? TECH_AISLE[idleSeat % TECH_AISLE.length];
     if (!post) idleSeat += 1;
-    const spot = hotspot(
-      `tech:${tech.id}`,
-      { kind: "technician", id: tech.id },
-      `${tech.name} — ${busyAt ? `working ${busyAt.current?.operation}` : "available"}`,
-      "",
-    );
+    const key = `tech:${tech.id}`;
     props.push({
-      key: spot.id,
+      key,
       depth: at.a + at.b + 0.05,
       node: (
-        <Hotspot {...spot}>
-          <TechnicianBadge frame={frame} a={at.a} b={at.b} name={tech.name} busy={Boolean(busyAt)} />
-        </Hotspot>
+        <FloorTechnician
+          frame={frame}
+          a={at.a}
+          b={at.b}
+          technician={tech}
+          busy={Boolean(busyAt)}
+          label={`${tech.name} — ${busyAt ? `working ${busyAt.current?.operation}` : "available"}`}
+          focused={focused === key}
+          onFocusChange={(next) =>
+            setFocused((current) => (next ? key : current === key ? null : current))
+          }
+        />
       ),
     });
   }
@@ -435,6 +701,7 @@ export function IsometricShop({ width, height, className }: IsometricShopProps) 
 
   return (
     <svg
+      ref={svgRef}
       width={width}
       height={height}
       viewBox={`0 0 ${width} ${height}`}
@@ -442,6 +709,9 @@ export function IsometricShop({ width, height, className }: IsometricShopProps) 
       role="img"
       aria-label={`Isometric shop floor at ${formatMinute(minute)}. ${scene.summary}`}
       style={{ display: "block", touchAction: "manipulation" }}
+      /* A proposal card dragged in from the story panel is a native HTML drag;
+       * allowing it here lets it reach a lift's drop handler. */
+      onDragOver={(e) => e.preventDefault()}
     >
       <defs>
         <pattern
@@ -462,6 +732,17 @@ export function IsometricShop({ width, height, className }: IsometricShopProps) 
           patternTransform="rotate(-35)"
         >
           <line x1="0" y1="0" x2="0" y2="9" stroke="var(--ink-3)" strokeWidth="1" opacity="0.35" />
+        </pattern>
+        {/* The countdown to a missing part: time running out reads alarm. */}
+        <pattern
+          id={`iso-hatch-alarm-${uid}`}
+          patternUnits="userSpaceOnUse"
+          width="5"
+          height="5"
+          patternTransform="rotate(45)"
+        >
+          <rect width="5" height="5" fill="var(--alarm-wash)" />
+          <line x1="0" y1="0" x2="0" y2="5" stroke="var(--alarm)" strokeWidth="2" />
         </pattern>
       </defs>
 
@@ -486,8 +767,15 @@ export function IsometricShop({ width, height, className }: IsometricShopProps) 
         <g key={prop.key}>{prop.node}</g>
       ))}
 
+      {drag ? <DragRoute frame={frame} drag={drag} /> : null}
+
       {labels}
-      <ZoneLabels frame={frame} waiting={scene.waitingCount} overflow={scene.lotOverflow} />
+      <ZoneLabels
+        frame={frame}
+        waiting={scene.waitingCount}
+        overflow={scene.lotOverflow}
+        leaving={scene.exitCars.length}
+      />
     </svg>
   );
 }
@@ -581,12 +869,82 @@ function liftStatus(
   endsAt: string | null,
   blocked: boolean,
   held: boolean,
+  queued: number,
 ): string {
   const eta = formatMinute(resource.blockedUntilMinute ?? 0);
+  // A live counter, not a decoration: how many jobs are pinned behind this one.
+  const queue = queued > 1 ? ` · Q${queued - 1}` : "";
+  // While blocked the countdown underneath carries the urgency; the status row
+  // stays short so it does not run over the lift it belongs to.
   if (blocked) return `BLOCKED · ETA ${eta}`;
-  if (endsAt) return `ENDS ${endsAt}`;
+  if (endsAt) return `ENDS ${endsAt}${queue}`;
   // The part is still on its way, but the applied plan means it is no longer a risk.
-  return held ? `PART DUE ${eta}` : "IDLE";
+  if (held) return `PART DUE ${eta}${queue}`;
+  return queued > 0 ? `IDLE · Q${queued}` : "IDLE";
+}
+
+/* ----------------------------------------------------- time made visible */
+
+/** The bar under a lift's name plate. */
+export interface LiftBarView {
+  /** 0..1 — elapsed share of the job, or of the wait for the part. */
+  fraction: number;
+  caption: string;
+  tone: Tone;
+  /** Waiting for a part is hatched, not filled: nothing is being made. */
+  hatched: boolean;
+}
+
+/**
+ * Everything the bar shows comes from `playbackMinute` against the last
+ * simulation's timeline. A blocked lift counts down to the part instead: the
+ * same shape, but it measures a wait rather than work.
+ */
+function liftBar(args: {
+  segment: Segment | undefined;
+  minute: number;
+  blocked: boolean;
+  etaMinute: number | null;
+  shiftStart: number;
+}): LiftBarView | null {
+  const { segment, minute, blocked, etaMinute, shiftStart } = args;
+  if (blocked && etaMinute !== null) {
+    const total = Math.max(1, etaMinute - shiftStart);
+    const left = Math.max(0, etaMinute - minute);
+    return {
+      fraction: clamp01((minute - shiftStart) / total),
+      caption: `${left} min to part`,
+      tone: "alarm",
+      hatched: true,
+    };
+  }
+  if (!segment) return null;
+  const total = Math.max(1, segment.end - segment.start);
+  const elapsed = Math.max(0, Math.min(total, minute - segment.start));
+  const left = total - elapsed;
+  return {
+    fraction: clamp01(elapsed / total),
+    caption:
+      left <= 5
+        ? `${shorten(segment.operation)} · ${left} min left`
+        : `${shorten(segment.operation)} · ${elapsed}/${total} min`,
+    tone: "ink",
+    hatched: false,
+  };
+}
+
+function clamp01(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
+}
+
+/** Operation names are prose; the name plate has room for a label. */
+function shorten(operation: string, max = 17): string {
+  return operation.length <= max ? operation : `${operation.slice(0, max - 1).trimEnd()}…`;
+}
+
+/** The bar tracks the drawing's scale so it stays legible at both panes. */
+function labelBarWidth(frame: IsoFrame): number {
+  return Math.round(Math.max(74, Math.min(126, frame.halfW * 2.1)));
 }
 
 function liftAria(
@@ -615,6 +973,8 @@ interface HotspotProps {
   focused: boolean;
   highlighted: boolean;
   handlers: Record<string, unknown>;
+  /** Lot cars are pickable; everything else is only a target. */
+  draggable?: boolean;
   children: ReactNode;
 }
 
@@ -622,14 +982,22 @@ interface HotspotProps {
  * Every interactive component of the floor is the same thing: a focusable
  * group that anchors the shared popover on hover, click and keyboard focus.
  */
-function Hotspot({ label, outline, focused, highlighted, handlers, children }: HotspotProps) {
+function Hotspot({
+  label,
+  outline,
+  focused,
+  highlighted,
+  handlers,
+  draggable,
+  children,
+}: HotspotProps) {
   return (
     <g
       tabIndex={0}
       role="button"
       aria-label={label}
       style={{
-        cursor: "pointer",
+        cursor: draggable ? "grab" : "pointer",
         outline: "none",
         // Finding 5 (I1): every hotspot shows keyboard focus. Shapes without a
         // zone outline (cars, technicians, the parts van) glow instead — a
@@ -1004,12 +1372,14 @@ function Lift({
   blocked,
   hatchId,
   car,
+  dropState = "none",
 }: {
   frame: IsoFrame;
   zone: IsoZone;
   blocked: boolean;
   hatchId: string;
   car: { bodyKind: IsoBodyKind; tone: Tone } | null;
+  dropState?: DropState;
 }) {
   const centre = zoneCentre(zone);
   const stroke = blocked ? "var(--warn)" : "var(--ink)";
@@ -1022,13 +1392,14 @@ function Lift({
   const postA = zone.a0 + 0.3;
   const postB = zone.a1 - 0.3;
   return (
-    <g>
+    <g opacity={dropState === "ineligible" ? 0.32 : 1}>
       <path
         d={frame.quad(zone)}
         fill={blocked ? `url(#${hatchId})` : "var(--sheet)"}
         stroke={stroke}
         strokeWidth={blocked ? 1.6 : 1.2}
       />
+      <DropTarget frame={frame} zone={zone} state={dropState} />
       <Post frame={frame} a={postA} b={zone.b0 + 0.42} stroke={stroke} />
       <Post frame={frame} a={postB} b={zone.b0 + 0.42} stroke={stroke} />
       <path
@@ -1059,6 +1430,33 @@ function Lift({
   );
 }
 
+/**
+ * Where a dragged car may land. Eligible pads outline dashed agent-blue and
+ * fill when the pointer is over them; ineligible ones simply dim (the parent
+ * sets the opacity), so the answer is legible without reading a word.
+ */
+function DropTarget({
+  frame,
+  zone,
+  state,
+}: {
+  frame: IsoFrame;
+  zone: IsoZone;
+  state: DropState;
+}) {
+  if (state !== "eligible" && state !== "over") return null;
+  return (
+    <path
+      d={frame.quad(inflate(zone, 0.1))}
+      fill={state === "over" ? "var(--agent-wash)" : "none"}
+      stroke="var(--agent)"
+      strokeWidth={state === "over" ? 2.4 : 1.6}
+      strokeDasharray="7 5"
+      pointerEvents="none"
+    />
+  );
+}
+
 function Post({ frame, a, b, stroke }: { frame: IsoFrame; a: number; b: number; stroke: string }) {
   const s = 0.14;
   const zone: IsoZone = { a0: a - s, a1: a + s, b0: b - s, b1: b + s };
@@ -1074,7 +1472,15 @@ function Post({ frame, a, b, stroke }: { frame: IsoFrame; a: number; b: number; 
 
 /* ------------------------------------------------------------ diagnostics */
 
-function Diagnostics({ frame, car }: { frame: IsoFrame; car: { bodyKind: IsoBodyKind; tone: Tone } | null }) {
+function Diagnostics({
+  frame,
+  car,
+  dropState = "none",
+}: {
+  frame: IsoFrame;
+  car: { bodyKind: IsoBodyKind; tone: Tone } | null;
+  dropState?: DropState;
+}) {
   // A compact console on the near-b corner of the pad. The car parks on the
   // far-b side, so the two projections stay fully disjoint on screen: the
   // car's largest a-b reach (11.25 - 9.14) never crosses the booth's smallest
@@ -1082,7 +1488,8 @@ function Diagnostics({ frame, car }: { frame: IsoFrame; car: { bodyKind: IsoBody
   const booth: IsoZone = { a0: DIAGNOSTICS.a1 - 1.5, a1: DIAGNOSTICS.a1 - 0.15, b0: DIAGNOSTICS.b0 + 0.2, b1: DIAGNOSTICS.b0 + 1.2 };
   const boothZ = 0.95;
   return (
-    <g>
+    <g opacity={dropState === "ineligible" ? 0.32 : 1}>
+      <DropTarget frame={frame} zone={DIAGNOSTICS} state={dropState} />
       {car ? (
         <Car frame={frame} a={DIAGNOSTICS.a0 + 0.9} b={DIAGNOSTICS.b1 - 1.05} heading="a+" bodyKind={car.bodyKind} tone={car.tone} length={1.7} />
       ) : null}
@@ -1094,6 +1501,58 @@ function Diagnostics({ frame, car }: { frame: IsoFrame; car: { bodyKind: IsoBody
 }
 
 /* ------------------------------------------------------------ technicians */
+
+/**
+ * A technician on the floor. The anchor comes from `usePopoverAnchor`, the
+ * same hook the Board's blocks use, so a click here opens the shared
+ * technician inspector rather than a second, floor-only popover.
+ */
+function FloorTechnician({
+  frame,
+  a,
+  b,
+  technician,
+  busy,
+  label,
+  focused,
+  onFocusChange,
+}: {
+  frame: IsoFrame;
+  a: number;
+  b: number;
+  technician: Technician;
+  busy: boolean;
+  label: string;
+  focused: boolean;
+  onFocusChange: (focused: boolean) => void;
+}) {
+  const anchor = usePopoverAnchor({ kind: "technician", id: technician.id });
+  const { onFocus, onBlur, ...rest } = anchor;
+  return (
+    <Hotspot
+      id={`tech:${technician.id}`}
+      label={label}
+      outline=""
+      focused={focused}
+      highlighted={false}
+      handlers={{
+        ...rest,
+        // The hook types its handlers for HTML; the anchor rectangle it reads
+        // is on `Element`, so an SVG group answers it just as well.
+        onFocus: (event: React.FocusEvent<SVGGElement>) => {
+          onFocusChange(true);
+          onFocus(event as unknown as React.FocusEvent<HTMLElement>);
+        },
+        onBlur: () => {
+          onFocusChange(false);
+          onBlur();
+        },
+      }}
+    >
+      <TechnicianBadge frame={frame} a={a} b={b} name={technician.name} busy={busy} />
+    </Hotspot>
+  );
+}
 
 function TechnicianBadge({
   frame,
@@ -1171,12 +1630,20 @@ function IsoText({
   );
 }
 
+/**
+ * The name plate: what this lift is, what it is doing, and how far along.
+ * The bar sits across the anchor so the leader line still reaches the pad.
+ */
 function LiftLabel({
   frame,
   zone,
   name,
   status,
   tone,
+  bar = null,
+  barWidth = 96,
+  alarmHatchId,
+  dimmed = false,
   topZ = LIFT_LABEL_Z,
   tickZ = PLATFORM_Z + 0.15,
 }: {
@@ -1185,22 +1652,124 @@ function LiftLabel({
   name: string;
   status: string;
   tone: Tone;
+  bar?: LiftBarView | null;
+  barWidth?: number;
+  alarmHatchId?: string;
+  dimmed?: boolean;
   topZ?: number;
   tickZ?: number;
 }) {
   const centre = zoneCentre(zone);
   const anchor = frame.project(centre.a, zone.b0 - 0.15, topZ);
   const tick = frame.project(centre.a, zone.b0 - 0.15, tickZ);
+  // The plate stacks upward from the anchor so the leader line keeps the same
+  // clearance to the pad whether or not there is a bar to show.
+  const nameY = bar ? anchor.y - 31 : anchor.y - 11;
+  const statusY = bar ? anchor.y - 20 : anchor.y;
   return (
-    <g pointerEvents="none">
+    <g pointerEvents="none" opacity={dimmed ? 0.32 : 1}>
       <line x1={anchor.x} y1={anchor.y + 4} x2={tick.x} y2={tick.y} stroke="var(--rule-2)" strokeWidth={0.9} />
       <circle cx={tick.x} cy={tick.y} r={1.8} fill="var(--rule-2)" />
-      <IsoText x={anchor.x} y={anchor.y - 11} tone="ink" size={11}>
+      <IsoText x={anchor.x} y={nameY} tone="ink" size={11}>
         {name}
       </IsoText>
-      <IsoText x={anchor.x} y={anchor.y} tone={tone} size={8.5}>
+      <IsoText x={anchor.x} y={statusY} tone={tone} size={8.5}>
         {status}
       </IsoText>
+      {bar ? (
+        <>
+          <IsoText x={anchor.x} y={anchor.y - 10} tone={bar.tone === "alarm" ? "alarm" : "muted"} size={7.5}>
+            {bar.caption}
+          </IsoText>
+          <LabelBar
+            x={anchor.x}
+            y={anchor.y - 5}
+            width={barWidth}
+            fraction={bar.fraction}
+            tone={bar.tone}
+            hatchId={bar.hatched ? alarmHatchId : undefined}
+          />
+        </>
+      ) : null}
+    </g>
+  );
+}
+
+/** A drafting gauge: ruled trough, measured fill. No gradient, no rounding. */
+function LabelBar({
+  x,
+  y,
+  width,
+  fraction,
+  tone,
+  hatchId,
+}: {
+  x: number;
+  y: number;
+  width: number;
+  fraction: number;
+  tone: Tone;
+  hatchId?: string;
+}) {
+  const height = 5;
+  const left = x - width / 2;
+  return (
+    <g>
+      <rect
+        x={left}
+        y={y}
+        width={width}
+        height={height}
+        fill="var(--paper)"
+        stroke="var(--rule)"
+        strokeWidth={0.9}
+      />
+      <rect
+        x={left}
+        y={y}
+        width={Math.max(0, fraction * width)}
+        height={height}
+        fill={hatchId ? `url(#${hatchId})` : STROKE[tone]}
+      />
+      {/* Mid-point tick: a gauge, not a loading bar. */}
+      <line
+        x1={left + width / 2}
+        y1={y - 1.5}
+        x2={left + width / 2}
+        y2={y + height + 1.5}
+        stroke="var(--rule-2)"
+        strokeWidth={0.8}
+      />
+    </g>
+  );
+}
+
+/**
+ * The live route while a car is in flight: from its slot in the lot, bent
+ * through the drive aisle, to wherever the pointer is — snapping to the lift
+ * under it. Agent blue and dashed, the same language the plan routes use,
+ * because it is the same decision made by hand.
+ */
+function DragRoute({ frame, drag }: { frame: IsoFrame; drag: FloorDrag }) {
+  const target = drag.over ? LIFTS.find((zone) => zone.resourceId === drag.over) : undefined;
+  const start = frame.project(drag.from.a, drag.from.b);
+  const end = target
+    ? frame.project(liftEntry(target).a, liftEntry(target).b)
+    : drag.point;
+  if (!end) return null;
+  const via = frame.project((drag.from.a + (target ? zoneCentre(target).a : drag.from.a + 4)) / 2, 4.7);
+  const control = { x: (via.x + (start.x + end.x) / 2) / 2, y: (via.y + (start.y + end.y) / 2) / 2 };
+  const d = `M${start.x.toFixed(1)} ${start.y.toFixed(1)} Q${control.x.toFixed(1)} ${control.y.toFixed(1)} ${end.x.toFixed(1)} ${end.y.toFixed(1)}`;
+  return (
+    <g pointerEvents="none">
+      <path d={d} fill="none" stroke="var(--agent)" strokeWidth={1.8} strokeDasharray="8 5" />
+      <path
+        d={chevron(end, { x: end.x - control.x, y: end.y - control.y }, 8)}
+        fill="none"
+        stroke="var(--agent)"
+        strokeWidth={1.8}
+      />
+      <circle cx={start.x} cy={start.y} r={3} fill="var(--agent)" />
     </g>
   );
 }
@@ -1235,10 +1804,12 @@ function ZoneLabels({
   frame,
   waiting,
   overflow,
+  leaving,
 }: {
   frame: IsoFrame;
   waiting: number;
   overflow: number;
+  leaving: number;
 }) {
   const lot = frame.project((LOT.a0 + LOT.a1) / 2 + 0.9, LOT.b1 + 0.5);
   const lotTick = frame.project((LOT.a0 + LOT.a1) / 2 + 0.9, LOT.b1 - 0.15);
@@ -1252,7 +1823,7 @@ function ZoneLabels({
       </IsoText>
       <line x1={exit.x} y1={exit.y + 4} x2={exitTick.x} y2={exitTick.y} stroke="var(--rule-2)" strokeWidth={0.9} />
       <IsoText x={exit.x} y={exit.y} anchor="middle" tone="muted">
-        Exit
+        {leaving > 0 ? `Exit · ${leaving}` : "Exit"}
       </IsoText>
     </g>
   );
