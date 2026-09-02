@@ -108,6 +108,8 @@ export interface WorkshopStore extends WorkshopState {
   setDraft(plan: Plan | null): void;
   /** Retargets a job inside the draft. No scenario is touched. */
   routeInDraft(workItemId: string, resourceId: string | null, position?: number | null): void;
+  /** Moves a job to the front of the draft's priorities (1 = first). No scenario is touched. */
+  bumpPriorityInDraft(workItemId: string): void;
   setApplyError(error: string | null): void;
   clearDraft(): void;
 }
@@ -289,6 +291,25 @@ export const useWorkshopStore = create<WorkshopStore>((set, get) => ({
     set({ draft: null, draftScenarioId: null, humanEdited: [], agentEdited: [], applyError: null }),
   routeInDraft: (workItemId, resourceId, position = 1) =>
     set((state) => draftRoutePatch(state, workItemId, resourceId, position, "human") ?? state),
+  bumpPriorityInDraft: (workItemId) =>
+    set((state) => {
+      if (!state.draft) return state;
+      const change: PlanChange = { command: "update_work_item", workItemId, priority: 1 };
+      const existing = state.draft.changes.findIndex(
+        (c) => c.command === "update_work_item" && c.workItemId === workItemId,
+      );
+      const changes =
+        existing === -1
+          ? [...state.draft.changes, change]
+          : state.draft.changes.map((c, i) => (i === existing ? change : c));
+      return {
+        draft: { ...state.draft, changes },
+        applyError: null,
+        humanEdited: state.humanEdited.includes(workItemId)
+          ? state.humanEdited
+          : [...state.humanEdited, workItemId],
+      };
+    }),
 }));
 
 /**

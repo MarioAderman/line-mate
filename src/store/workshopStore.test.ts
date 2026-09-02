@@ -22,6 +22,26 @@ beforeEach(() => {
   });
 });
 
+describe("priority inside the draft", () => {
+  it("bumps a job to priority 1 in the draft only, attributed to the human", () => {
+    expect(runCommand("explore_schedules", {}, "agent").ok).toBe(true);
+    const before = useWorkshopStore.getState();
+    const worldPriority = before.scenarios
+      .find((s) => s.id === before.activeScenarioId)!
+      .workItems.find((w) => w.id === "veh-09")!.priority;
+    before.bumpPriorityInDraft("veh-09");
+    const after = useWorkshopStore.getState();
+    expect(
+      after.draft!.changes.find((c) => c.command === "update_work_item" && c.workItemId === "veh-09"),
+    ).toMatchObject({ priority: 1 });
+    expect(after.humanEdited).toContain("veh-09");
+    expect(
+      after.scenarios.find((s) => s.id === after.activeScenarioId)!.workItems.find((w) => w.id === "veh-09")!
+        .priority,
+    ).toBe(worldPriority);
+  });
+});
+
 describe("the shift clock", () => {
   it("ticks one minute at a time from the shift start and stops at closing", () => {
     const s = useWorkshopStore.getState();
