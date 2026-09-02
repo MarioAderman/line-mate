@@ -93,6 +93,10 @@ export interface WorkshopStore extends WorkshopState {
   run(name: string, input?: unknown, actor?: Actor): CommandResult;
   select(selection: Selection | null): void;
   setPlaybackMinute(minute: number | null): void;
+  /** The shift clock: one shift-minute per tick while running; stops at closing. */
+  clockRunning: boolean;
+  setClockRunning(running: boolean): void;
+  tickClock(): void;
   setMcpStatus(status: McpStatus, toolCount?: number): void;
   setView(view: View): void;
   /** Returns false (and does nothing) when the transition is not allowed. */
@@ -112,6 +116,7 @@ export interface WorkshopStore extends WorkshopState {
 export const RESET_VIEW = {
   selection: null,
   playbackMinute: null,
+  clockRunning: true,
   agentAttention: null,
   view: "board",
   story: "calm",
@@ -136,6 +141,7 @@ export const useWorkshopStore = create<WorkshopStore>((set, get) => ({
   ...createInitialState({ story: "calm" }),
   selection: null,
   playbackMinute: null,
+  clockRunning: true,
   agentAttention: null,
   mcpStatus: "detecting",
   mcpToolCount: 0,
@@ -229,10 +235,34 @@ export const useWorkshopStore = create<WorkshopStore>((set, get) => ({
     }
     set(patch);
     if (result.ok) advanceStoryAfterCommand(name, input, result.data, get, set);
+    // A human retarget or priority change outside the proposal is a world
+    // change the manager wants to see land: re-simulate the touched scenario
+    // right away so ETAs and the promise counter answer the drop.
+    if (
+      result.ok &&
+      actor === "human" &&
+      (name === "route_work_item" || name === "update_work_item") &&
+      get().story !== "proposal"
+    ) {
+      const touched = (input as { scenarioId?: string }).scenarioId ?? get().activeScenarioId;
+      get().run("run_simulation", { scenarioId: touched }, "simulation");
+    }
     return result;
   },
   select: (selection) => set({ selection }),
   setPlaybackMinute: (playbackMinute) => set({ playbackMinute }),
+  setClockRunning: (clockRunning) => set({ clockRunning }),
+  tickClock: () => {
+    const state = get();
+    const scenario = state.scenarios.find((s) => s.id === state.activeScenarioId);
+    if (!scenario) return;
+    const now = state.playbackMinute ?? scenario.clock.startMinute;
+    if (now >= scenario.clock.endMinute) {
+      if (state.clockRunning) set({ clockRunning: false });
+      return;
+    }
+    set({ playbackMinute: now + 1 });
+  },
   setView: (view) => set({ view, popover: null }),
   setStory: (story) => {
     const current = get().story;

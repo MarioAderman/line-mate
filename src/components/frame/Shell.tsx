@@ -12,6 +12,7 @@ import { useEffect, type ReactNode } from "react";
 import { AnimatePresence } from "motion/react";
 import { VIEWPORTS, useWorkshopStore } from "@/store";
 import { AlertCard } from "./AlertCard";
+import { ClockTicker } from "./ClockTicker";
 import { Cover } from "./Cover";
 import { Header } from "./Header";
 import { LiveStrip } from "./LiveStrip";
@@ -55,6 +56,7 @@ export function Shell({ board, floor }: Props) {
             <Cover key="cover" />
           ) : (
             <>
+              <ClockTicker />
               <Header />
               <PromisesStrip />
               <div data-slot="field" className="relative min-h-0 flex-1">

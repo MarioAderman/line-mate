@@ -22,6 +22,37 @@ beforeEach(() => {
   });
 });
 
+describe("the shift clock", () => {
+  it("ticks one minute at a time from the shift start and stops at closing", () => {
+    const s = useWorkshopStore.getState();
+    const scenario = s.scenarios.find((x) => x.id === s.activeScenarioId)!;
+    expect(s.playbackMinute).toBeNull();
+    s.tickClock();
+    expect(useWorkshopStore.getState().playbackMinute).toBe(scenario.clock.startMinute + 1);
+    useWorkshopStore.setState({ playbackMinute: scenario.clock.endMinute });
+    useWorkshopStore.getState().tickClock();
+    expect(useWorkshopStore.getState().playbackMinute).toBe(scenario.clock.endMinute);
+    expect(useWorkshopStore.getState().clockRunning).toBe(false);
+  });
+
+  it("a demo reset puts the clock back to the shift start, running", () => {
+    useWorkshopStore.setState({ playbackMinute: 900, clockRunning: false });
+    expect(useWorkshopStore.getState().run("reset_demo", {}, "human").ok).toBe(true);
+    expect(useWorkshopStore.getState().playbackMinute).toBeNull();
+    expect(useWorkshopStore.getState().clockRunning).toBe(true);
+  });
+
+  it("re-simulates right after a human retarget outside the proposal", () => {
+    const before = useWorkshopStore.getState().changes.length;
+    const result = runCommand("route_work_item", { workItemId: "veh-05", resourceId: "bay-2" }, "human");
+    expect(result.ok).toBe(true);
+    const state = useWorkshopStore.getState();
+    const newChanges = state.changes.slice(0, state.changes.length - before);
+    expect(newChanges.some((c) => c.command === "run_simulation" && c.actor === "simulation")).toBe(true);
+    expect(state.simulations[state.activeScenarioId]).toBeDefined();
+  });
+});
+
 describe("the cover sheet", () => {
   it("opens on a fresh load, dismisses once, and never returns on reset", () => {
     expect(useWorkshopStore.getState().cover).toBe(true);

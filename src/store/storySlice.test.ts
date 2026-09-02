@@ -230,11 +230,12 @@ describe("beat 4 — the draft", () => {
 
   it("routes to the world, not the draft, outside beat 4", () => {
     routeFromDrop("veh-01", "bay-1", 1);
-    expect(names(useWorkshopStore.getState().changes.map((c) => ({ name: c.command }) as never))).toBeDefined();
-    expect(useWorkshopStore.getState().changes[0]).toMatchObject({
-      command: "route_work_item",
-      actor: "human",
-    });
+    const changes = useWorkshopStore.getState().changes;
+    expect(names(changes.map((c) => ({ name: c.command }) as never))).toBeDefined();
+    // The drop lands in the world as the human's change, and the store answers
+    // it right away with a re-simulation attributed to the engine.
+    expect(changes[1]).toMatchObject({ command: "route_work_item", actor: "human" });
+    expect(changes[0]).toMatchObject({ command: "run_simulation", actor: "simulation" });
   });
 });
 
