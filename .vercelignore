@@ -1,0 +1,12 @@
+# Never upload process material or recordings to Vercel
+dev/
+.claude/
+.codex/
+.git/
+node_modules/
+*.mov
+*.mp4
+*.mkv
+CLAUDE.md
+CLAUDE.local.md
+AGENTS.md
