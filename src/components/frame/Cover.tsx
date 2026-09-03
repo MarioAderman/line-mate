@@ -79,7 +79,9 @@ export function Cover() {
 
   return (
     <motion.div
-      className="relative h-full w-full overflow-hidden bg-paper"
+      // An overlay, not a flex sibling: while it fades out the board is
+      // already underneath instead of stacking below it.
+      className="absolute inset-0 z-50 overflow-hidden bg-paper"
       style={{ backgroundImage: GRID, backgroundSize: "32px 32px" }}
       exit={reduced ? { opacity: 0 } : { opacity: 0, y: -12 }}
       transition={{ duration: reduced ? 0 : 0.25, ease: [0.2, 0, 0, 1] }}

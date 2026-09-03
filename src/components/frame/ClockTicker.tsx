@@ -12,14 +12,23 @@ import { useWorkshopStore } from "@/store";
 /** 1 shift-minute per 2 s: the whole 14:15→18:00 shift plays in 7.5 minutes. */
 export const TICK_MS = 2000;
 
+/**
+ * Beats where time is allowed to pass. The moment the issue lands the shop
+ * freezes at that minute: the manager and the agent look at the same frozen
+ * picture through exploration and proposal, and nothing finishes or leaves on
+ * its own. Time resumes once the recovery is applied.
+ */
+const TIME_FLOWS_IN = new Set(["calm", "resolved"]);
+
 export function ClockTicker() {
   const running = useWorkshopStore((s) => s.clockRunning);
+  const story = useWorkshopStore((s) => s.story);
 
   useEffect(() => {
-    if (!running) return;
+    if (!running || !TIME_FLOWS_IN.has(story)) return;
     const id = window.setInterval(() => useWorkshopStore.getState().tickClock(), TICK_MS);
     return () => window.clearInterval(id);
-  }, [running]);
+  }, [running, story]);
 
   return null;
 }

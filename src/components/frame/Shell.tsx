@@ -70,13 +70,13 @@ export function Shell({ board, floor }: Props) {
         data-slot="shell"
         data-viewport={viewport}
         style={{ width: size.width, height: size.height, maxWidth: "100vw", maxHeight: "100vh" }}
-        className="flex flex-col overflow-hidden border-x border-rule"
+        className="relative flex flex-col overflow-hidden border-x border-rule"
       >
         <AnimatePresence initial={false}>
-          {cover ? (
-            <Cover key="cover" />
-          ) : (
-            <>
+          {cover && <Cover key="cover" />}
+        </AnimatePresence>
+        {!cover && (
+          <>
               <ClockTicker />
               <Header />
               <PromisesStrip />
@@ -89,7 +89,6 @@ export function Shell({ board, floor }: Props) {
               <LiveStrip />
             </>
           )}
-        </AnimatePresence>
       </div>
       <Popover />
       <DemoControls />
