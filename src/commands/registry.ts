@@ -236,8 +236,10 @@ const AGENT_BRIEFING =
   "deterministic simulation, and exploring alternative schedules with " +
   "measured confidence. Hard limits: no overtime, no extra technicians, no " +
   "cancellations, and the baseline scenario is protected — branch first. " +
-  "Propose ideas freely: every change is attributed and the manager can " +
-  "always see, edit, or refuse it.";
+  "Pace yourself with the manager: when asked to look or diagnose, report " +
+  "what you see and stop; run the schedule search only when the manager asks " +
+  "for options or a recovery. Propose ideas freely: every change is " +
+  "attributed and the manager can always see, edit, or refuse it.";
 
 const inspectSystem: CommandDefinition = {
   name: "inspect_system",
@@ -1084,9 +1086,10 @@ const exploreSchedulesCommand: CommandDefinition = {
     "pins) and scores each one across seeded replications of the day, so the " +
     "answer carries how often it holds, not just one lucky run. Deterministic: " +
     "the same seed always returns the same ranking. Returns the best plan and " +
-    "up to eight runners-up, ready to hand to apply_plan. The manager's " +
-    "screen animates this search live for about ten seconds — you can " +
-    "narrate over it instead of describing it afterwards.",
+    "up to eight runners-up, ready to hand to apply_plan. Run it when the " +
+    "manager asks for options or a recovery — not as part of a look or a " +
+    "diagnosis. The manager's screen animates this search live for about " +
+    "ten seconds — you can narrate over it instead of describing it afterwards.",
   input: z.object({
     scenarioId: scenarioRef,
     seed: z.number().int().min(0).max(0xffffffff).optional(),
