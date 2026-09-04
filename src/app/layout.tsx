@@ -23,6 +23,14 @@ export const metadata: Metadata = {
   title: "Line-Mate",
   description:
     "One more technician on the line: a WebMCP-native shop floor where the manager and a browser agent recover a failing schedule together — the manager keeps authority.",
+  metadataBase: new URL("https://line-mate.vercel.app"),
+  openGraph: {
+    title: "Line-Mate",
+    description: "One more technician on the line. You keep authority.",
+    url: "https://line-mate.vercel.app",
+    images: [{ url: "/cover.png", width: 1920, height: 1080, alt: "Line-Mate — SHEET 0" }],
+  },
+  twitter: { card: "summary_large_image", images: ["/cover.png"] },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

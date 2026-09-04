@@ -1,11 +1,14 @@
 # Line-Mate
 
+[![Line-Mate — SHEET 0, the cover of the drawing set](public/cover.png)](https://line-mate.vercel.app)
+
 **One more technician on the line.** Line-Mate is a WebMCP-native shop floor where a human
 manager and a browser agent run the same operation, live — the agent explores real recovery
 plans, the manager keeps authority. Built for the 2026 WebMCP Challenge.
 
-> 🚗 **Live PWA:** https://line-mate.vercel.app
-> 🎬 **Demo video:** _coming soon_ <!-- TODO: video link after recording -->
+> 🚗 **Live app:** https://line-mate.vercel.app
+> 🎬 **Demo video (2½ min):** https://www.youtube.com/watch?v=SHw8O6rTDx8
+> 📦 **Source:** https://github.com/MarioAderman/line-mate · MIT
 
 ## What this is
 
