@@ -4,7 +4,7 @@
 
 **Line-Mate is one more technician on the line: a digital twin of a repair shop in a browser tab, where an agent works the floor through WebMCP and the manager keeps authority.**
 
-🚗 **[Web app](https://line-mate.vercel.app)** &nbsp;·&nbsp; 🎬 **[Demo video](https://www.youtube.com/watch?v=SHw8O6rTDx8)**
+<p align="center">🚗 <b><a href="https://line-mate.vercel.app">Web app</a></b> &nbsp;·&nbsp; 🎬 <b><a href="https://www.youtube.com/watch?v=SHw8O6rTDx8">Demo video</a></b></p>
 
 ## What Line-Mate is
 
