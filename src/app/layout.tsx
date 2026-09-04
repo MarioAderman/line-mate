@@ -28,7 +28,7 @@ export const metadata: Metadata = {
     title: "Line-Mate",
     description: "One more technician on the line. You keep authority.",
     url: "https://line-mate.vercel.app",
-    images: [{ url: "/cover.png", width: 1920, height: 1080, alt: "Line-Mate — SHEET 0" }],
+    images: [{ url: "/cover.png", width: 1567, height: 995, alt: "Line-Mate — SHEET 0" }],
   },
   twitter: { card: "summary_large_image", images: ["/cover.png"] },
 };
