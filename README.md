@@ -1,63 +1,41 @@
-# Line-Mate
+<p align="center">
+  <a href="https://line-mate.vercel.app"><img src="public/cover.png" alt="Line-Mate — SHEET 0, the cover of the drawing set" width="100%"></a>
+</p>
 
-[![Line-Mate — SHEET 0, the cover of the drawing set](public/cover.png)](https://line-mate.vercel.app)
+**Line-Mate is one more technician on the line: a digital twin of a repair shop in a browser tab, where an agent works the floor through WebMCP and the manager keeps authority.**
 
-**One more technician on the line.** Line-Mate is a WebMCP-native shop floor where a human
-manager and a browser agent run the same operation, live — the agent explores real recovery
-plans, the manager keeps authority. Built for the 2026 WebMCP Challenge.
+🚗 **Web app:** https://line-mate.vercel.app
+🎬 **Demo video:** https://www.youtube.com/watch?v=SHw8O6rTDx8
 
-> 🚗 **Live app:** https://line-mate.vercel.app
-> 🎬 **Demo video (2½ min):** https://www.youtube.com/watch?v=SHw8O6rTDx8
-> 📦 **Source:** https://github.com/MarioAderman/line-mate · MIT
+## What Line-Mate is
 
-## What this is
+Line-Mate is a live model of a mid-market auto repair shop — three bays, a diagnostics station, three technicians, twelve cars and six promises by COB. By simulating the shop's floor, it helps the manager make a decision upon real-data considering multiple scenarios and understanding the trade-off between one and another.
 
-A mid-market auto repair shop, Friday 14:15, six customer promises before closing. A water-pump
-delay blocks Bay 3 and puts two promises at risk. The manager and an external agent — ChatGPT /
-Codex through the experimental [WebMCP](https://github.com/webmachinelearning/webmcp) browser API —
-recover the schedule **together, on the same live world**:
+What makes it WebMCP-native rather than "AI added to a simulator": there is one world and one command boundary. A click, a drag and an agent tool call all run the same command, stamped with its actor (`human`, `agent`, `simulation`), so every change on the board is attributed, the baseline is protected behind scenario branches, and the agent's context arrives through the tools themselves — no system prompt, no scraped DOM, no second backend.
 
-1. **Calm** — the shift board shows 6/6 promises on plan.
-2. **Escalation** — the part delay lands: Bay 3 blocked, 4/6, two cars in red.
-3. **Exploration** — the agent searches 141 alternative schedules across thousands of seeded
-   simulation runs; the screen animates the search as it happens.
-4. **Proposal** — the winning plan appears as draggable cards. The manager can retarget any car;
-   the agent can move the same dropdowns through tools. Every change carries its author.
-5. **Resolved** — apply & notify: 6/6 recovered, shift note logged with its channels.
+## WebMCP tools
 
-This is not "AI added to a simulator". The thesis is **shared operation**: one world, one command
-boundary, visible attribution (`human` / `agent` / `simulation`), a protected baseline, and
-scenario branches so the agent can experiment without touching the plan of record.
-
-## Why it's honest
-
-- **Deterministic engine.** Pure TypeScript discrete-event simulation in the browser. Same seed,
-  same numbers — every run, every machine.
-- **Measured confidence.** The exploration scores every candidate across seeded replications and
-  reports how often a plan holds. No hardcoded percentages anywhere.
-- **Nothing is applied silently.** The proposal is a draft on screen until the manager applies it.
-  Notifications are recorded in the shop log; the page performs no external delivery.
-
-## WebMCP surface
-
-The page registers **13 tools** via `document.modelContext` (Imperative API, feature-detected):
-
-| Kind | Tools |
+| Tool | What it is for |
 |---|---|
-| Read | `inspect_system` (includes the agent briefing and the on-screen draft), `inspect_resource`, `inspect_work_item`, `get_simulation_results`, `compare_scenarios` |
-| Mutation | `create_scenario`, `update_resource`, `update_work_item`, `route_work_item`, `apply_plan`, `post_shift_note` |
-| Action | `run_simulation`, `explore_schedules` |
+| `inspect_system` | The whole picture: shift clock, constraints, bays and technicians, jobs with their promises, latest KPIs, recent changes. Carries the agent's briefing and, during a proposal, the on-screen draft with per-change authorship. Use it first. |
+| `inspect_resource` | One bay or station: status and blocking reason, routed jobs, utilization, queue, who can work there. |
+| `inspect_work_item` | One vehicle's job: promise, priority, steps and the skills they need, current route, feasibility versus the promise. |
+| `get_simulation_results` | Structured results of a scenario's last run: promises met, completions, revenue and cost, utilization, late and unfinished jobs, bottleneck. |
+| `compare_scenarios` | Aligned KPIs for 2–4 scenarios with deltas against the first and a one-line verdict. |
+| `create_scenario` | Clone a scenario into a named experiment and make it active — the move that keeps the baseline intact. |
+| `update_resource` | Validated partial update of a bay or station (status, blocking, capacity, availability, cost). |
+| `update_work_item` | Change a job's priority. Promises, steps and revenue are the customer's facts and cannot be edited. |
+| `route_work_item` | Send a job to a bay or station at a queue position, or release its pin. While a proposal is on screen it edits the visible draft instead — attributed to the agent, nothing applied until the manager says so. |
+| `apply_plan` | Apply a whole plan — the one `explore_schedules` returned or the manager's edited version — as one attributed change. |
+| `post_shift_note` | Record the shift note in the shop log with its channels (slack, email, sms). No external delivery, no network request. |
+| `run_simulation` | Run the deterministic shift simulation for a scenario and persist the result. Same input, same numbers. |
+| `explore_schedules` | Search a bounded set of alternative schedules and score each across seeded replications — returns the best plan and up to eight runners-up with measured keep-rates. The screen animates the real search. |
 
-Human-only demo controls (`inject_event`, `activate_scenario`, `reset_demo`) are **not** exposed
-to agents. Tool responses are structured, validated with zod, and bounded. During the proposal
-beat, an agent `route_work_item` on the draft's scenario edits the visible draft — dropdown moves,
-`agent change` badge — and the world stays untouched until the manager applies.
+Three commands are deliberately **not** exposed to agents — `inject_event` (the part delay), `activate_scenario` (which scenario the screen shows) and `reset_demo` — they are the manager's controls (`Shift+E`, the Board/Floor switch, `Shift+0`).
 
-### Registration (the imperative API, exactly)
+### The format every tool obeys
 
-Every tool is registered through the WebMCP imperative API on `document.modelContext`, each with
-`name`, `description`, `inputSchema` (JSON Schema generated from the zod command schema), and an
-async `execute` — plus `title` and `annotations.readOnlyHint`:
+Each tool is a command from the app's single registry, registered through the WebMCP imperative API with `name`, `description`, `inputSchema` (JSON Schema generated from the command's zod schema) and an async `execute`, plus `title` and `annotations.readOnlyHint`:
 
 ```ts
 // src/webmcp/adapter.ts — feature-detected, torn down with an AbortController
@@ -67,76 +45,77 @@ await document.modelContext.registerTool(
 );
 ```
 
-The deprecated `navigator.modelContext` spelling is deliberately not used. When no WebMCP host is
-present the app degrades to a no-op and the header pill reads `Agent bridge unavailable`; with a
-host it reads **`Agent linked · 13 tools`**.
+A tool descriptor as the agent sees it:
 
-### Tested with real agents
-
-Four recorded live sessions drove these tools from **Codex realtime voice threads in the ChatGPT
-desktop app's in-app browser** (WebMCP on by default there). In the recorded transcripts the
-agent, unprompted about our internals: inspected the escalated shop, ran the seeded exploration
-(the winning plan kept **6/6 promises in 100% of measured runs** across independent seeds),
-branched scenarios to protect the baseline, applied the plan, verified it by simulation, edited
-the on-screen proposal draft through `route_work_item`, and posted the shift note — every change
-attributed `agent` in the visible history.
-
-## Try it
-
-```bash
-npm install
-npm run dev        # http://localhost:3000
+```json
+{
+  "name": "route_work_item",
+  "title": "Route work item",
+  "description": "Send a job to a specific bay or station, optionally at a queue position (1 = next) …",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "workItemId": { "type": "string" },
+      "resourceId": { "type": ["string", "null"] },
+      "position": { "type": ["integer", "null"], "minimum": 1, "maximum": 20 },
+      "scenarioId": { "type": "string" }
+    },
+    "required": ["workItemId", "resourceId"]
+  },
+  "annotations": { "readOnlyHint": false }
+}
 ```
 
-- **Views:** `Board | Floor` switch in the header (shift board / isometric shop).
-- **Demo story:** `Shift+E` part delay · `Shift+R` explore & propose · `Shift+A` apply & notify ·
-  `Shift+0` reset.
-- **With an agent:** open the page in a WebMCP-capable surface — ChatGPT desktop app's built-in
-  browser / Codex, or Chrome with `chrome://flags/#enable-webmcp-testing` (DevTools gains a WebMCP
-  panel to inspect and invoke the tools directly). The header pill shows `Agent linked · 13 tools`
-  when the bridge is up.
+And a real call from a recorded live session — the agent moving the black wagon inside the manager's proposal:
 
-### Judge test script (2 minutes, live URL)
+```jsonc
+// call
+route_work_item({ "scenarioId": "SCN-BASELINE", "workItemId": "veh-05", "resourceId": "bay-2" })
+// result
+{
+  "draftEdited": true,
+  "workItemId": "veh-05",
+  "route": { "resourceId": "bay-2", "position": 1 },
+  "summary": "Updated the proposed-plan draft on the manager's screen. Nothing is applied to the world until the manager presses Apply & notify team."
+}
+```
 
-1. Open **https://line-mate.vercel.app** in the ChatGPT desktop app's in-app browser, or in
-   Chrome 149+ with `chrome://flags/#enable-webmcp-testing` enabled (then restart Chrome).
-2. Dismiss the cover (**Let's get started** or `Enter`) and confirm the header pill says
-   **`Agent linked · 13 tools`**.
-3. Press **`Shift+E`** — the part delay lands: Bay 3 blocked, 4/6 promises at risk.
-4. Ask the agent: *"Inspect the shop and recover today's promises — explore schedules, branch a
-   scenario, apply the best plan, and verify it."* Watch the search animate on screen (~10 s),
-   the proposal land with attributed cards, and the recovery reach **6/6**.
-5. No agent handy? Chrome DevTools' **WebMCP panel** lists all 13 tools and can invoke them
-   directly — `inspect_system` first. No login, no credentials, nothing to install.
+Every mutation returns a `changeId`, the actor and a before/after summary; responses are JSON-safe and bounded (the exploration's animation trace, for instance, is stripped unless the caller asks for it).
 
-## Architecture
+## Project structure
 
 ```text
-human UI ─┐
-          ├─> application commands ─> canonical Zustand store ─> simulation engine
-WebMCP ───┘                                      │
-                                                 └─> visible change history
+line-mate/
+├─ src/
+│  ├─ app/            Next.js App Router: layout (metadata, fonts), page, tab icon, cover image
+│  ├─ domain/         Canonical serializable types, zod schemas, fixtures, disruptions, demo beats
+│  ├─ simulation/     Deterministic discrete-event engine + seeded schedule exploration (no React)
+│  ├─ commands/       The one command boundary: registry, validation, actor attribution, agent briefing
+│  ├─ store/          The single live world (Zustand) + story/view state, shift clock, draft
+│  ├─ webmcp/         document.modelContext adapter: feature detection, tool descriptors, cleanup
+│  └─ components/
+│     ├─ frame/       Shell, cover (SHEET 0), header, strips, title block, inspector, clock ticker
+│     ├─ board/       Shift board: promise strip, station cards, lanes, drag & drop, progress
+│     ├─ floor/       Isometric shop: 2.5D SVG projection, lifts, lot, routes, drag to lift
+│     ├─ story/       Exploration panel, proposal card, resolved card, demo keyboard controls
+│     └─ vehicles/    Side-view vehicle glyphs by body kind
+├─ docs/              Architecture, simulation model, WebMCP tool contract, design system, demo scenario
+├─ public/            cover.png (also the social preview)
+└─ package.json       npm run dev · npm run verify (typecheck + lint + tests + build)
 ```
 
-- `src/domain` — canonical serializable types, fixtures, disruptions
-- `src/simulation` — deterministic engine + seeded schedule exploration (no React)
-- `src/commands` — the one command boundary; UI and agents call the same commands
-- `src/store` — the single live world state + story/view state
-- `src/webmcp` — registration lifecycle, schemas, serialization, feature detection
-- `src/components` — shift board, isometric floor, story panels (S1 "Blueprint" design language)
+Every `src/` subdirectory carries its own README.
 
-Stack: Next.js (App Router) · React · TypeScript · Tailwind · Zustand · Motion · zod. Fully
-client-side; the deployment target only serves static assets.
+## Try it in two minutes
 
-## Development
+1. Open **https://line-mate.vercel.app** in the ChatGPT desktop app's in-app browser, or in Chrome 149+ with `chrome://flags/#enable-webmcp-testing` enabled (restart Chrome).
+2. **Let's get started** (or `Enter`). The header pill reads **`Agent linked · 13 tools`**.
+3. `Shift+E` — the part delay lands: Bay 3 blocked, 4/6 at risk.
+4. Ask the agent: *"Take a look at the shop and tell me what's wrong."* Then: *"Now run the schedules and keep all six — no overtime, no extra techs."* Watch the search animate, the proposal land with attributed cards, and the recovery reach **6/6**. Drag a card or change its bay yourself, then ask what changed.
+5. No agent handy? Chrome DevTools' **WebMCP panel** lists the 13 tools and invokes them directly. Nothing to install, no login.
 
-```bash
-npm run verify     # typecheck + lint + tests + build — the quality gate
-npm test
-```
+Views: `Board | Floor` in the header. Demo keys: `Shift+E` delay · `Shift+R` explore & propose · `Shift+A` apply & notify · `Shift+0` reset.
 
-Each `src/` subdirectory carries its own README, and `docs/` holds the architecture,
-simulation-model, WebMCP tool contract, design-system, and demo-scenario references.
+## Dev stack
 
-Built for the 2026 WebMCP Challenge by Mario Aderman with Claude Code and Codex working as
-parallel agent sessions on the same repository.
+Next.js (App Router) · React · TypeScript · Tailwind · Zustand · Motion · zod · Vercel. Built by Mario Aderman for the 2026 WebMCP Challenge with Claude Code and Codex
